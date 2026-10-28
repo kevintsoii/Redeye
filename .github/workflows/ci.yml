@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild -project Redeye.xcodeproj -scheme Redeye -derivedDataPath build \
+            -resultBundlePath build/TestResults.xcresult test
+
+      - name: Build Release
+        run: |
+          set -o pipefail
+          xcodebuild -project Redeye.xcodeproj -scheme Redeye -configuration Release \
+            -derivedDataPath build build
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: build/TestResults.xcresult
