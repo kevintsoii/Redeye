@@ -23,6 +23,15 @@ final class URLCommandTests: XCTestCase {
         XCTAssertEqual(command("redeye://activate?other=1"), .activate(nil), "unknown parameters are ignored")
     }
 
+    func testLidClosed() {
+        XCTAssertEqual(command("redeye://activate?lid=1"), .activate(nil, lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?lid=true&hours=2"), .activate(2 * 60 * 60, lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?LID=yes"), .activate(nil, lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?lid=0"), .activate(nil))
+        XCTAssertNil(command("redeye://activate?lid=maybe"))
+        XCTAssertNil(command("redeye://activate?lid"))
+    }
+
     func testInvalidURLs() {
         XCTAssertNil(command("redeye://sleep"))
         XCTAssertNil(command("redeye://"))

@@ -10,6 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - MIT license.
 - `redeye://` URL scheme for scripts and the terminal: `open -g redeye://activate`, `redeye://deactivate` and `redeye://toggle`. `activate` takes optional `seconds`, `minutes` and `hours` (e.g. `redeye://activate?hours=2`).
 - Only one copy of Redeye runs at a time. Opening a second copy quits it, so there's never a second menu bar icon.
+- Stay Awake (Ignore Lid): a second mode that stops your Mac sleeping even when you close the lid or choose Apple menu > Sleep, for keeping Claude running in a bag. Uses a small helper that runs as administrator (`pmset disablesleep`), which you approve once in System Settings > General > Login Items & Extensions. Sleep is always turned back on when you leave the mode, quit Redeye, or if Redeye crashes or is force-quit.
+- Left-click now steps through three modes: Sleep Normally (outline sun), Stay Awake (yellow sun), Stay Awake (Ignore Lid) (red sun).
+- Stay Awake (Ignore Lid) submenu with the same durations as Stay Awake.
+- Keep screen on while staying awake setting in a new Stay Awake tab in Settings: keeps the screen on too, like `caffeinate -d`. Off by default.
+- Renamed the menu items: Keep Awake is now Stay Awake, and Allow Sleep is now Sleep Normally. The status line reads "Sleeping Normally", "Staying Awake Forever" or "Staying Awake Until 3:45 PM".
+- `lid=1` parameter for the URL scheme: `open -g "redeye://activate?lid=1"`.
 
 ## [1.0.0] - 2026-10-27
 

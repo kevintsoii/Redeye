@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class SettingsWindowControllerTests: XCTestCase {
     func testWindowStyle() throws {
-        let window = try XCTUnwrap(SettingsWindowController().window)
+        let window = try XCTUnwrap(SettingsWindowController(preventer: makePreventer()).window)
         XCTAssertTrue(window.styleMask.contains(.titled))
         XCTAssertTrue(window.styleMask.contains(.closable))
         XCTAssertFalse(window.styleMask.contains(.resizable))
@@ -15,12 +15,13 @@ final class SettingsWindowControllerTests: XCTestCase {
     }
 
     func testTabs() throws {
-        let tabs = try XCTUnwrap(SettingsWindowController().window?.contentViewController as? NSTabViewController)
+        let tabs = try XCTUnwrap(SettingsWindowController(preventer: makePreventer()).window?.contentViewController as? NSTabViewController)
         XCTAssertEqual(tabs.tabStyle, .toolbar)
-        XCTAssertEqual(tabs.tabViewItems.map(\.label), ["General", "About"])
-        XCTAssertEqual(tabs.tabViewItems.map { $0.viewController?.title }, ["General", "About"])
+        XCTAssertEqual(tabs.tabViewItems.map(\.label), ["General", "Stay Awake", "About"])
+        XCTAssertEqual(tabs.tabViewItems.map { $0.viewController?.title }, ["General", "Stay Awake", "About"])
         XCTAssertTrue(tabs.tabViewItems[0].viewController is GeneralSettingsViewController)
-        XCTAssertTrue(tabs.tabViewItems[1].viewController is AboutViewController)
+        XCTAssertTrue(tabs.tabViewItems[1].viewController is StayAwakeSettingsViewController)
+        XCTAssertTrue(tabs.tabViewItems[2].viewController is AboutViewController)
         for tab in tabs.tabViewItems {
             XCTAssertNotNil(tab.image, "\(tab.label) tab has no icon")
         }
@@ -40,11 +41,46 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertEqual(checkbox.state, SMAppService.mainApp.status == .enabled ? .on : .off)
     }
 
-    func testGeneralHasSize() {
+    func testGeneralHasOnlyLaunchAtLogin() {
         let general = GeneralSettingsViewController()
         general.loadView()
-        XCTAssertGreaterThan(general.preferredContentSize.width, 0)
-        XCTAssertGreaterThan(general.preferredContentSize.height, 0)
+        XCTAssertEqual(descendants(of: general.view, ofType: NSButton.self).map(\.title), ["Launch at login"])
+    }
+
+    // MARK: - Stay Awake
+
+    func testKeepDisplayOnCheckbox() throws {
+        let preventer = makePreventer()
+        let stayAwake = StayAwakeSettingsViewController(preventer: preventer)
+        stayAwake.loadView()
+        stayAwake.viewWillAppear()
+
+        let checkbox = try XCTUnwrap(descendants(of: stayAwake.view, ofType: NSButton.self)
+            .first { $0.title == "Keep screen on while staying awake" })
+        XCTAssertEqual(checkbox.state, .off, "off by default, like caffeinate -i")
+
+        checkbox.state = .on
+        let action = try XCTUnwrap(checkbox.action)
+        XCTAssertTrue(NSApp.sendAction(action, to: checkbox.target, from: checkbox))
+        XCTAssertTrue(preventer.keepDisplayOn)
+    }
+
+    func testTabsHaveSize() {
+        for tab in [GeneralSettingsViewController(), StayAwakeSettingsViewController(preventer: makePreventer())] {
+            tab.loadView()
+            XCTAssertGreaterThan(tab.preferredContentSize.width, 0)
+            XCTAssertGreaterThan(tab.preferredContentSize.height, 0)
+        }
+    }
+
+    func testCheckboxReflectsSavedSetting() throws {
+        let preventer = makePreventer()
+        preventer.keepDisplayOn = true
+        let stayAwake = StayAwakeSettingsViewController(preventer: preventer)
+        stayAwake.loadView()
+        stayAwake.viewWillAppear()
+        let checkbox = try XCTUnwrap(descendants(of: stayAwake.view, ofType: NSButton.self).first)
+        XCTAssertEqual(checkbox.state, .on)
     }
 
     // MARK: - About
@@ -70,5 +106,9 @@ final class SettingsWindowControllerTests: XCTestCase {
         about.loadView()
         let icon = try XCTUnwrap(descendants(of: about.view, ofType: NSImageView.self).first)
         XCTAssertNotNil(icon.image)
+    }
+
+    private func makePreventer() -> SleepPreventer {
+        SleepPreventer(defaults: makeTestDefaults(for: self), sleepDisabler: FakeSleepDisabler())
     }
 }

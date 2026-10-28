@@ -6,9 +6,11 @@ import XCTest
 final class SleepPreventerTests: XCTestCase {
     /// A fresh preventer per test, released afterwards so assertions don't leak between tests.
     private lazy var preventer = makePreventer()
+    private lazy var helper = FakeSleepDisabler()
+    private lazy var defaults = makeTestDefaults(for: self)
 
     private func makePreventer() -> SleepPreventer {
-        let preventer = SleepPreventer()
+        let preventer = SleepPreventer(defaults: defaults, sleepDisabler: helper)
         addTeardownBlock { @MainActor in preventer.deactivate(notify: false) }
         return preventer
     }
@@ -149,5 +151,150 @@ final class SleepPreventerTests: XCTestCase {
         other.deactivate()
         XCTAssertTrue(preventer.isActive)
         XCTAssertEqual(redeyeAssertionCount(), 1)
+    }
+
+    // MARK: - Modes
+
+    func testModeFollowsActivation() {
+        XCTAssertEqual(preventer.mode, .off)
+        preventer.activate()
+        XCTAssertEqual(preventer.mode, .awake)
+        preventer.activate(.lidClosed)
+        XCTAssertEqual(preventer.mode, .lidClosed)
+        preventer.deactivate()
+        XCTAssertEqual(preventer.mode, .off)
+    }
+
+    func testCycleStepsThroughModes() {
+        var seen: [SleepMode] = []
+        for _ in 0..<4 {
+            preventer.cycle()
+            seen.append(preventer.mode)
+        }
+        XCTAssertEqual(seen, [.awake, .lidClosed, .off, .awake])
+        XCTAssertNil(preventer.expiresAt, "cycling is indefinite")
+    }
+
+    func testAwakeDoesNotUseHelper() {
+        preventer.activate()
+        preventer.deactivate()
+        XCTAssertEqual(helper.requests, [])
+    }
+
+    func testLidClosedDisablesSleepAndHoldsAssertion() {
+        preventer.activate(.lidClosed, for: 60)
+        XCTAssertEqual(helper.requests, [true])
+        XCTAssertEqual(redeyeAssertionCount(), 1)
+        XCTAssertNotNil(preventer.expiresAt)
+    }
+
+    func testLeavingLidClosedRestoresSleep() {
+        preventer.activate(.lidClosed)
+        preventer.activate(.awake)
+        XCTAssertEqual(helper.requests, [true, false])
+        XCTAssertEqual(preventer.mode, .awake)
+        XCTAssertTrue(hasRedeyeAssertion())
+
+        preventer.activate(.lidClosed)
+        preventer.deactivate()
+        XCTAssertEqual(helper.requests, [true, false, true, false])
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testDeactivateWithoutNotifyStillRestoresSleep() {
+        preventer.activate(.lidClosed)
+        preventer.deactivate(notify: false)  // what quitting does
+        XCTAssertFalse(helper.sleepDisabled)
+    }
+
+    func testLidClosedExpiryRestoresSleep() {
+        preventer.activate(.lidClosed, for: 0.2)
+        runMainLoop(for: 0.6)
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertFalse(helper.sleepDisabled)
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testHelperFailureFallsBackToOffAndReports() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        helper.error = LidSleepError.needsApproval
+        preventer.activate()
+        preventer.cycle()
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertFalse(hasRedeyeAssertion())
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertFalse(helper.sleepDisabled)
+    }
+
+    func testStaysInPreviousModeUntilHelperReplies() {
+        helper.holdReplies = true
+        preventer.activate()
+        preventer.activate(.lidClosed)
+        XCTAssertEqual(preventer.mode, .awake)
+        helper.reply()
+        XCTAssertEqual(preventer.mode, .lidClosed)
+    }
+
+    func testLateHelperReplyAfterDeactivateIsIgnored() {
+        helper.holdReplies = true
+        preventer.activate(.lidClosed)
+        preventer.deactivate()
+        helper.reply()
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertEqual(helper.requests, [true, false], "the cancelled request is undone")
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testLosingHelperConnectionStopsLidClosedMode() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.activate(.lidClosed)
+        helper.onConnectionLost?()
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertFalse(hasRedeyeAssertion())
+        XCTAssertEqual(errors.count, 1)
+    }
+
+    func testLosingHelperConnectionWhileAwakeIsIgnored() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.activate()
+        helper.onConnectionLost?()
+        XCTAssertEqual(preventer.mode, .awake)
+        XCTAssertTrue(errors.isEmpty)
+    }
+
+    // MARK: - Keep display on
+
+    func testKeepDisplayOnUsesDisplayAssertion() {
+        preventer.keepDisplayOn = true
+        preventer.activate()
+        let types = redeyeAssertions().map { $0[kIOPMAssertionTypeKey] as? String }
+        XCTAssertEqual(types, [kIOPMAssertionTypePreventUserIdleDisplaySleep])
+    }
+
+    func testChangingKeepDisplayOnWhileActiveSwapsAssertion() {
+        preventer.activate(for: 60)
+        preventer.keepDisplayOn = true
+        var types = redeyeAssertions().map { $0[kIOPMAssertionTypeKey] as? String }
+        XCTAssertEqual(types, [kIOPMAssertionTypePreventUserIdleDisplaySleep])
+        XCTAssertNotNil(preventer.expiresAt, "the session keeps its timer")
+
+        preventer.keepDisplayOn = false
+        types = redeyeAssertions().map { $0[kIOPMAssertionTypeKey] as? String }
+        XCTAssertEqual(types, [kIOPMAssertionTypePreventUserIdleSystemSleep])
+    }
+
+    func testChangingKeepDisplayOnWhileOffDoesNotActivate() {
+        preventer.keepDisplayOn = true
+        XCTAssertFalse(preventer.isActive)
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testKeepDisplayOnIsSaved() {
+        preventer.keepDisplayOn = true
+        XCTAssertTrue(defaults.bool(forKey: SleepPreventer.keepDisplayOnKey))
+        XCTAssertTrue(makePreventer().keepDisplayOn)
     }
 }

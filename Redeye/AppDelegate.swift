@@ -1,9 +1,14 @@
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    let preventer = SleepPreventer()
+    let preventer: SleepPreventer
     private(set) var statusItem: NSStatusItem!
-    private lazy var settings = SettingsWindowController()
+    private lazy var settings = SettingsWindowController(preventer: preventer)
+
+    init(preventer: SleepPreventer = SleepPreventer()) {
+        self.preventer = preventer
+        super.init()
+    }
 
     private let durations: [(String, TimeInterval?)] = [
         ("Forever", nil),
@@ -19,11 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(statusItemClicked)
-            // Left click toggles, right click (or ctrl-click) opens the menu.
+            // Left click steps through the modes, right click (or ctrl-click) opens the menu.
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         preventer.onChange = { [weak self] in self?.updateIcon() }
+        preventer.onError = { [weak self] error in self?.showError(error) }
         updateIcon()
+        LidSleepHelper.refreshRegistration()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -42,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         switch command {
-        case .activate(let duration): preventer.activate(for: duration)
+        case .activate(let duration, let lidClosed): preventer.activate(lidClosed ? .lidClosed : .awake, for: duration)
         case .deactivate: preventer.deactivate()
         case .toggle: preventer.toggle()
         }
@@ -57,25 +64,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.menu = buildMenu()
             statusItem.button?.performClick(nil)
         } else {
-            preventer.toggle()
+            preventer.cycle()
         }
     }
 
-    // Detach the menu after it closes so left click goes back to toggling.
+    // Detach the menu after it closes so left click goes back to cycling.
     func menuDidClose(_ menu: NSMenu) {
         statusItem.menu = nil
     }
 
+    /// Outline sun for Sleep Normally, yellow for Stay Awake, red for Stay Awake (Ignore Lid).
     private func updateIcon() {
-        let name = preventer.isActive ? "sun.horizon.fill" : "sun.horizon"
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Redeye")?
+        var config = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        let name: String
+        let tooltip: String
+        switch preventer.mode {
+        case .off:
+            name = "sun.horizon"
+            tooltip = "Redeye: Sleep Normally"
+        case .awake:
+            name = "sun.horizon.fill"
+            tooltip = "Redeye: Stay Awake"
+            config = config.applying(.init(paletteColors: [.systemYellow]))
+        case .lidClosed:
+            name = "sun.horizon.fill"
+            tooltip = "Redeye: Stay Awake (Ignore Lid)"
+            config = config.applying(.init(paletteColors: [.systemRed]))
+        }
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: tooltip)?
             .withSymbolConfiguration(config)
-        image?.isTemplate = true
+        image?.isTemplate = preventer.mode == .off
         statusItem.button?.image = image
-        statusItem.button?.toolTip = preventer.isActive
-            ? "Redeye: keeping your Mac awake"
-            : "Redeye: sleep allowed"
+        statusItem.button?.toolTip = tooltip
+    }
+
+    private func showError(_ error: Error) {
+        let needsApproval = if case LidSleepError.needsApproval = error { true } else { false }
+        let alert = NSAlert()
+        alert.messageText = needsApproval ? "Allow Redeye in System Settings" : "Stay Awake (Ignore Lid) stopped"
+        alert.informativeText = error.localizedDescription
+        if needsApproval {
+            alert.addButton(withTitle: "Open System Settings")
+            alert.addButton(withTitle: "Cancel")
+        }
+        if #available(macOS 14, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        if alert.runModal() == .alertFirstButtonReturn, needsApproval {
+            LidSleepHelper.openLoginItemsSettings()
+        }
     }
 
     // MARK: - Menu
@@ -90,18 +129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         if preventer.isActive {
-            menu.addItem(item("Allow Sleep", #selector(allowSleep)))
+            menu.addItem(item("Sleep Normally", #selector(allowSleep)))
         }
 
-        let activateItem = NSMenuItem(title: "Keep Awake", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        for (index, (title, _)) in durations.enumerated() {
-            let sub = item(title, #selector(activateForDuration(_:)))
-            sub.tag = index
-            submenu.addItem(sub)
-        }
-        activateItem.submenu = submenu
-        menu.addItem(activateItem)
+        menu.addItem(durationsItem("Stay Awake", #selector(activateForDuration(_:))))
+        menu.addItem(durationsItem("Stay Awake (Ignore Lid)", #selector(activateLidClosedForDuration(_:))))
 
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))
@@ -111,6 +143,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return menu
     }
 
+    private func durationsItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for (index, (title, _)) in durations.enumerated() {
+            let sub = item(title, action)
+            sub.tag = index
+            submenu.addItem(sub)
+        }
+        parent.submenu = submenu
+        return parent
+    }
+
     private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
@@ -118,11 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func statusText() -> String {
-        guard preventer.isActive else { return "Sleep allowed" }
-        guard let expiresAt = preventer.expiresAt else { return "Awake indefinitely" }
+        guard preventer.isActive else { return "Sleeping Normally" }
+        let awake = preventer.mode == .lidClosed ? "Staying Awake (Ignoring Lid)" : "Staying Awake"
+        guard let expiresAt = preventer.expiresAt else { return "\(awake) Forever" }
         let formatter = DateFormatter()
         formatter.timeStyle = .short
-        return "Awake until \(formatter.string(from: expiresAt))"
+        return "\(awake) Until \(formatter.string(from: expiresAt))"
     }
 
     // MARK: - Actions
@@ -132,7 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func activateForDuration(_ sender: NSMenuItem) {
-        preventer.activate(for: durations[sender.tag].1)
+        preventer.activate(.awake, for: durations[sender.tag].1)
+    }
+
+    @objc private func activateLidClosedForDuration(_ sender: NSMenuItem) {
+        preventer.activate(.lidClosed, for: durations[sender.tag].1)
     }
 
     @objc private func openSettings() {

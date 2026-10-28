@@ -3,10 +3,11 @@ import ServiceManagement
 
 /// The Settings window: toolbar tabs for set-and-forget options. Quick actions stay in the menu.
 final class SettingsWindowController: NSWindowController {
-    convenience init() {
+    convenience init(preventer: SleepPreventer) {
         let tabs = NSTabViewController()
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(Self.tab(GeneralSettingsViewController(), "General", "gearshape"))
+        tabs.addTabViewItem(Self.tab(StayAwakeSettingsViewController(preventer: preventer), "Stay Awake", "sun.horizon"))
         tabs.addTabViewItem(Self.tab(AboutViewController(), "About", "info.circle"))
 
         let window = NSWindow(contentViewController: tabs)
@@ -45,12 +46,7 @@ final class GeneralSettingsViewController: NSViewController {
         launchAtLogin.target = self
         launchAtLogin.action = #selector(toggleLaunchAtLogin)
 
-        let hint = NSTextField(wrappingLabelWithString: "Works best when Redeye.app is in /Applications.")
-        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 380
-
-        view = paddedStack([launchAtLogin, hint], width: 420)
+        view = paddedStack([launchAtLogin, hint("Works best when Redeye.app is in /Applications.")], width: 420)
         preferredContentSize = view.fittingSize
     }
 
@@ -78,6 +74,40 @@ final class GeneralSettingsViewController: NSViewController {
             }
         }
         launchAtLogin.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+}
+
+// MARK: - Stay Awake
+
+final class StayAwakeSettingsViewController: NSViewController {
+    private let preventer: SleepPreventer
+    private let keepDisplayOn = NSButton(checkboxWithTitle: "Keep screen on while staying awake", target: nil, action: nil)
+
+    init(preventer: SleepPreventer) {
+        self.preventer = preventer
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func loadView() {
+        keepDisplayOn.target = self
+        keepDisplayOn.action = #selector(toggleKeepDisplayOn)
+
+        view = paddedStack([keepDisplayOn, hint("When on, the screen doesn't sleep due to inactivity.")], width: 420)
+        preferredContentSize = view.fittingSize
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        keepDisplayOn.state = preventer.keepDisplayOn ? .on : .off
+    }
+
+    @objc private func toggleKeepDisplayOn() {
+        preventer.keepDisplayOn = keepDisplayOn.state == .on
     }
 }
 
@@ -112,6 +142,15 @@ final class AboutViewController: NSViewController {
 }
 
 // MARK: - Layout
+
+/// Small gray explanatory text under a setting.
+private func hint(_ text: String) -> NSTextField {
+    let hint = NSTextField(wrappingLabelWithString: text)
+    hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    hint.textColor = .secondaryLabelColor
+    hint.preferredMaxLayoutWidth = 380
+    return hint
+}
 
 /// A vertical stack with standard window padding, at a fixed content width.
 private func paddedStack(_ views: [NSView], width: CGFloat) -> NSView {

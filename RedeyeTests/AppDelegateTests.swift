@@ -5,8 +5,10 @@ import XCTest
 @MainActor
 final class AppDelegateTests: XCTestCase {
     /// A delegate that hasn't launched, so it has no status item. Enough for the menu.
+    private lazy var helper = FakeSleepDisabler()
     private lazy var delegate: AppDelegate = {
-        let delegate = AppDelegate()
+        let preventer = SleepPreventer(defaults: makeTestDefaults(for: self), sleepDisabler: helper)
+        let delegate = AppDelegate(preventer: preventer)
         addTeardownBlock { @MainActor in delegate.preventer.deactivate(notify: false) }
         return delegate
     }()
@@ -23,8 +25,9 @@ final class AppDelegateTests: XCTestCase {
 
     func testMenuWhenSleepAllowed() {
         XCTAssertEqual(titles(of: delegate.buildMenu()), [
-            "Sleep allowed", "---",
-            "Keep Awake", "---",
+            "Sleeping Normally", "---",
+            "Stay Awake",
+            "Stay Awake (Ignore Lid)", "---",
             "Settings…", "---",
             "Quit Redeye",
         ])
@@ -33,9 +36,10 @@ final class AppDelegateTests: XCTestCase {
     func testMenuWhenAwake() {
         delegate.preventer.activate()
         XCTAssertEqual(titles(of: delegate.buildMenu()), [
-            "Awake indefinitely", "---",
-            "Allow Sleep",
-            "Keep Awake", "---",
+            "Staying Awake Forever", "---",
+            "Sleep Normally",
+            "Stay Awake",
+            "Stay Awake (Ignore Lid)", "---",
             "Settings…", "---",
             "Quit Redeye",
         ])
@@ -47,9 +51,11 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertNil(status.action)
     }
 
-    func testDurationsSubmenu() throws {
-        let submenu = try XCTUnwrap(item("Keep Awake", in: delegate.buildMenu()).submenu)
-        XCTAssertEqual(titles(of: submenu), ["Forever", "30 Minutes", "1 Hour", "6 Hours", "12 Hours", "24 Hours"])
+    func testDurationsSubmenus() throws {
+        for parent in ["Stay Awake", "Stay Awake (Ignore Lid)"] {
+            let submenu = try XCTUnwrap(item(parent, in: delegate.buildMenu()).submenu)
+            XCTAssertEqual(titles(of: submenu), ["Forever", "30 Minutes", "1 Hour", "6 Hours", "12 Hours", "24 Hours"])
+        }
     }
 
     func testKeyEquivalents() throws {
@@ -61,10 +67,11 @@ final class AppDelegateTests: XCTestCase {
     func testEveryActionableItemIsWired() throws {
         delegate.preventer.activate()
         let menu = delegate.buildMenu()
-        let submenu = try XCTUnwrap(item("Keep Awake", in: menu).submenu)
+        let submenu = try XCTUnwrap(item("Stay Awake", in: menu).submenu)
+        let lidSubmenu = try XCTUnwrap(item("Stay Awake (Ignore Lid)", in: menu).submenu)
         // Items with a submenu get AppKit's own submenuAction:, so skip those.
-        let actionable = (menu.items + submenu.items).filter { $0.action != nil && !$0.hasSubmenu }
-        XCTAssertEqual(actionable.count, 3 + 6)  // Allow Sleep, Settings, Quit + durations
+        let actionable = (menu.items + submenu.items + lidSubmenu.items).filter { $0.action != nil && !$0.hasSubmenu }
+        XCTAssertEqual(actionable.count, 3 + 6 + 6)  // Sleep Normally, Settings, Quit + both sets of durations
         for menuItem in actionable {
             XCTAssertTrue(menuItem.target === delegate, menuItem.title)
             XCTAssertTrue(delegate.responds(to: menuItem.action), menuItem.title)
@@ -88,7 +95,7 @@ final class AppDelegateTests: XCTestCase {
         ]
         for (title, duration) in expected {
             delegate.preventer.deactivate(notify: false)
-            let submenu = try XCTUnwrap(item("Keep Awake", in: delegate.buildMenu()).submenu)
+            let submenu = try XCTUnwrap(item("Stay Awake", in: delegate.buildMenu()).submenu)
             try perform(item(title, in: submenu))
 
             XCTAssertTrue(delegate.preventer.isActive, title)
@@ -102,9 +109,25 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertEqual(redeyeAssertionCount(), 1)
     }
 
+    func testLidClosedDurationItemsActivateLidClosedMode() throws {
+        let submenu = try XCTUnwrap(item("Stay Awake (Ignore Lid)", in: delegate.buildMenu()).submenu)
+        try perform(item("1 Hour", in: submenu))
+        XCTAssertEqual(delegate.preventer.mode, .lidClosed)
+        XCTAssertTrue(helper.sleepDisabled)
+        let expiresAt = try XCTUnwrap(delegate.preventer.expiresAt)
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 60 * 60, accuracy: 2)
+    }
+
+    func testAllowSleepItemEndsLidClosedMode() throws {
+        delegate.preventer.activate(.lidClosed)
+        try perform(item("Sleep Normally", in: delegate.buildMenu()))
+        XCTAssertEqual(delegate.preventer.mode, .off)
+        XCTAssertFalse(helper.sleepDisabled)
+    }
+
     func testAllowSleepItemDeactivates() throws {
         delegate.preventer.activate(for: 60)
-        try perform(item("Allow Sleep", in: delegate.buildMenu()))
+        try perform(item("Sleep Normally", in: delegate.buildMenu()))
         XCTAssertFalse(delegate.preventer.isActive)
         XCTAssertFalse(hasRedeyeAssertion())
     }
@@ -129,6 +152,16 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertFalse(hasRedeyeAssertion())
     }
 
+    func testURLActivateLidClosed() {
+        delegate.handle(URL(string: "redeye://activate?lid=1&hours=2")!)
+        XCTAssertEqual(delegate.preventer.mode, .lidClosed)
+        XCTAssertTrue(helper.sleepDisabled)
+        XCTAssertNotNil(delegate.preventer.expiresAt)
+
+        delegate.handle(URL(string: "redeye://deactivate")!)
+        XCTAssertFalse(helper.sleepDisabled)
+    }
+
     func testURLToggle() {
         delegate.handle(URL(string: "redeye://toggle")!)
         XCTAssertTrue(delegate.preventer.isActive)
@@ -146,12 +179,22 @@ final class AppDelegateTests: XCTestCase {
     // MARK: - Status text
 
     func testStatusTextWhenSleepAllowed() {
-        XCTAssertEqual(delegate.statusText(), "Sleep allowed")
+        XCTAssertEqual(delegate.statusText(), "Sleeping Normally")
     }
 
     func testStatusTextWhenIndefinite() {
         delegate.preventer.activate()
-        XCTAssertEqual(delegate.statusText(), "Awake indefinitely")
+        XCTAssertEqual(delegate.statusText(), "Staying Awake Forever")
+    }
+
+    func testStatusTextWhenLidClosed() throws {
+        delegate.preventer.activate(.lidClosed)
+        XCTAssertEqual(delegate.statusText(), "Staying Awake (Ignoring Lid) Forever")
+        delegate.preventer.activate(.lidClosed, for: 60 * 60)
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let expiresAt = try XCTUnwrap(delegate.preventer.expiresAt)
+        XCTAssertEqual(delegate.statusText(), "Staying Awake (Ignoring Lid) Until \(formatter.string(from: expiresAt))")
     }
 
     func testStatusTextWhenTimed() throws {
@@ -159,7 +202,7 @@ final class AppDelegateTests: XCTestCase {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         let expiresAt = try XCTUnwrap(delegate.preventer.expiresAt)
-        XCTAssertEqual(delegate.statusText(), "Awake until \(formatter.string(from: expiresAt))")
+        XCTAssertEqual(delegate.statusText(), "Staying Awake Until \(formatter.string(from: expiresAt))")
     }
 
     // MARK: - Status item
@@ -168,29 +211,38 @@ final class AppDelegateTests: XCTestCase {
         let button = try XCTUnwrap(launchedDelegate().statusItem.button)
         XCTAssertTrue(button.target === delegate)
         XCTAssertNotNil(button.action)
-        XCTAssertNil(delegate.statusItem.menu, "left click should toggle, not open a menu")
+        XCTAssertNil(delegate.statusItem.menu, "left click should cycle modes, not open a menu")
     }
 
     func testIconFollowsState() throws {
         let button = try XCTUnwrap(launchedDelegate().statusItem.button)
         let image = try XCTUnwrap(button.image)
         XCTAssertTrue(image.isTemplate)
-        XCTAssertEqual(button.toolTip, "Redeye: sleep allowed")
+        XCTAssertEqual(button.toolTip, "Redeye: Sleep Normally")
 
-        delegate.preventer.toggle()
-        XCTAssertEqual(button.toolTip, "Redeye: keeping your Mac awake")
-        XCTAssertNotEqual(button.image?.tiffRepresentation, image.tiffRepresentation, "active icon should differ")
+        delegate.preventer.cycle()
+        XCTAssertEqual(button.toolTip, "Redeye: Stay Awake")
+        let awake = try XCTUnwrap(button.image)
+        XCTAssertFalse(awake.isTemplate, "the awake sun is yellow")
+        XCTAssertNotEqual(awake.tiffRepresentation, image.tiffRepresentation, "active icon should differ")
 
-        delegate.preventer.toggle()
-        XCTAssertEqual(button.toolTip, "Redeye: sleep allowed")
+        delegate.preventer.cycle()
+        XCTAssertEqual(button.toolTip, "Redeye: Stay Awake (Ignore Lid)")
+        let lidClosed = try XCTUnwrap(button.image)
+        XCTAssertFalse(lidClosed.isTemplate, "the lid-closed sun is red")
+        XCTAssertNotEqual(lidClosed.tiffRepresentation, awake.tiffRepresentation, "red should differ from yellow")
+
+        delegate.preventer.cycle()
+        XCTAssertEqual(button.toolTip, "Redeye: Sleep Normally")
+        XCTAssertTrue(try XCTUnwrap(button.image).isTemplate)
     }
 
     func testIconResetsWhenTimerExpires() throws {
         let button = try XCTUnwrap(launchedDelegate().statusItem.button)
         delegate.preventer.activate(for: 0.2)
-        XCTAssertEqual(button.toolTip, "Redeye: keeping your Mac awake")
+        XCTAssertEqual(button.toolTip, "Redeye: Stay Awake")
         runMainLoop(for: 0.6)
-        XCTAssertEqual(button.toolTip, "Redeye: sleep allowed")
+        XCTAssertEqual(button.toolTip, "Redeye: Sleep Normally")
     }
 
     func testMenuDetachesWhenClosed() {
@@ -206,6 +258,25 @@ final class AppDelegateTests: XCTestCase {
     func testQuittingRestoresSleep() {
         delegate.preventer.activate()
         delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        XCTAssertFalse(delegate.preventer.isActive)
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testQuittingInLidClosedModeRestoresSleep() {
+        delegate.preventer.activate(.lidClosed)
+        delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        XCTAssertFalse(delegate.preventer.isActive)
+        XCTAssertFalse(helper.sleepDisabled)
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testQuittingWhileLidClosedRequestIsPendingRestoresSleep() {
+        helper.holdReplies = true
+        delegate.preventer.activate(.lidClosed)
+        delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        helper.reply()
+        XCTAssertEqual(helper.requests, [true, false], "the in-flight request is undone")
+        XCTAssertFalse(helper.sleepDisabled)
         XCTAssertFalse(delegate.preventer.isActive)
         XCTAssertFalse(hasRedeyeAssertion())
     }
