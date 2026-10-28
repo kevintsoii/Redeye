@@ -57,6 +57,8 @@ Unit tests live in `RedeyeTests/` (XCTest, hosted in the app). Quit Redeye first
 killall Redeye; xcodebuild -project Redeye.xcodeproj -scheme Redeye -derivedDataPath build test
 ```
 
+GitHub Actions (`.github/workflows/ci.yml`) runs the same tests plus a Release build on a `macos-26` runner for every push to `main` and every pull request. When a run fails, the `.xcresult` bundle is uploaded as an artifact.
+
 Possible things to check by hand before a release:
 
 1. Left-click the icon. It should switch to the filled icon.
