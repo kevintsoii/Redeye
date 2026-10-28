@@ -2,11 +2,13 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let preventer: SleepPreventer
+    private let notifier: Notifying
     private(set) var statusItem: NSStatusItem!
     private lazy var settings = SettingsWindowController(preventer: preventer)
 
-    init(preventer: SleepPreventer = SleepPreventer()) {
+    init(preventer: SleepPreventer = SleepPreventer(), notifier: Notifying = Notifier()) {
         self.preventer = preventer
+        self.notifier = notifier
         super.init()
     }
 
@@ -20,8 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Left click steps through the modes, right click (or ctrl-click) opens the menu.
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        preventer.onChange = { [weak self] in self?.updateIcon() }
+        preventer.onChange = { [weak self] in self?.modeChanged() }
         preventer.onError = { [weak self] error in self?.showError(error) }
+        preventer.onAutoStop = { [weak self] stop in self?.notifier.post(title: stop.title, body: stop.message) }
         updateIcon()
         LidSleepHelper.refreshRegistration()
     }
@@ -70,6 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Detach the menu after it closes so left click goes back to cycling.
     func menuDidClose(_ menu: NSMenu) {
         statusItem.menu = nil
+    }
+
+    /// Asks for notification permission the first time the Mac is kept awake, since that's when
+    /// Redeye might later need to say it stopped.
+    private func modeChanged() {
+        updateIcon()
+        if preventer.isActive { notifier.requestAuthorization() }
     }
 
     /// Outline sun for Sleep Normally, yellow for Stay Awake, red for Stay Awake (Ignore Lid).

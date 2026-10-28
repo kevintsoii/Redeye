@@ -89,3 +89,18 @@ final class FakePowerMonitor: PowerMonitoring {
         didSet { onChange?() }
     }
 }
+
+/// Records notifications instead of posting them.
+@MainActor
+final class FakeNotifier: Notifying {
+    private(set) var authorizationRequests = 0
+    private(set) var posted: [(title: String, body: String)] = []
+
+    func requestAuthorization() {
+        authorizationRequests += 1
+    }
+
+    func post(title: String, body: String) {
+        posted.append((title, body))
+    }
+}

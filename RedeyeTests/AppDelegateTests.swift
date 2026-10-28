@@ -6,10 +6,12 @@ import XCTest
 final class AppDelegateTests: XCTestCase {
     /// A delegate that hasn't launched, so it has no status item. Enough for the menu.
     private lazy var helper = FakeSleepDisabler()
+    private lazy var power = FakePowerMonitor()
+    private lazy var notifier = FakeNotifier()
     private lazy var delegate: AppDelegate = {
         let preventer = SleepPreventer(
-            defaults: makeTestDefaults(for: self), sleepDisabler: helper, powerMonitor: FakePowerMonitor())
-        let delegate = AppDelegate(preventer: preventer)
+            defaults: makeTestDefaults(for: self), sleepDisabler: helper, powerMonitor: power)
+        let delegate = AppDelegate(preventer: preventer, notifier: notifier)
         addTeardownBlock { @MainActor in delegate.preventer.deactivate(notify: false) }
         return delegate
     }()
@@ -274,6 +276,41 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertEqual(button.toolTip, "Redeye: Stay Awake")
         runMainLoop(for: 0.6)
         XCTAssertEqual(button.toolTip, "Redeye: Sleep Normally")
+    }
+
+    // MARK: - Notifications
+
+    func testTimerExpiryPostsNotification() {
+        _ = launchedDelegate()
+        delegate.preventer.activate(for: 0.2)
+        runMainLoop(for: 0.5)
+        XCTAssertEqual(notifier.posted.map(\.title), ["Stay Awake ended"])
+    }
+
+    func testSafetyStopPostsNotification() {
+        _ = launchedDelegate()
+        delegate.preventer.heatCutoff = true
+        delegate.preventer.activate(.lidClosed)
+        power.state.thermalState = .critical
+        XCTAssertEqual(notifier.posted.map(\.title), ["Redeye is letting your Mac sleep"])
+        XCTAssertEqual(notifier.posted.map(\.body), [SafetyStop.tooHot.localizedDescription])
+    }
+
+    func testTurningOffDoesNotPostNotification() {
+        _ = launchedDelegate()
+        delegate.preventer.activate(for: 60)
+        delegate.preventer.deactivate()
+        delegate.preventer.cycle()
+        delegate.preventer.cycle()
+        delegate.preventer.cycle()
+        XCTAssertTrue(notifier.posted.isEmpty)
+    }
+
+    func testAsksForNotificationPermissionOnlyWhenStayingAwake() {
+        _ = launchedDelegate()
+        XCTAssertEqual(notifier.authorizationRequests, 0, "not at launch")
+        delegate.preventer.activate()
+        XCTAssertGreaterThan(notifier.authorizationRequests, 0)
     }
 
     func testMenuDetachesWhenClosed() {

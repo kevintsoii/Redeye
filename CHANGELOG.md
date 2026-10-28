@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-28
+
 ### Added
 
 - MIT license.
@@ -17,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `lid=1` parameter for the URL scheme: `open -g "redeye://activate?lid=1"`.
 - Default durations for left-click in Settings > Stay Awake: Forever for Stay Awake, 24 hours for Stay Awake (Ignore Lid).
 - Safety tab in Settings: let the Mac sleep when the battery is low or the Mac gets too hot. Both off by default.
+- Notifications when Redeye stops keeping your Mac awake on its own: a timed session ends, a Safety cutoff kicks in, or the Ignore Lid helper stops. Redeye asks for permission the first time you use Stay Awake.
 
 ## [1.0.0] - 2026-10-27
 

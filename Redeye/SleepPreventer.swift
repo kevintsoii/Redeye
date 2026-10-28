@@ -33,6 +33,32 @@ enum SafetyStop: LocalizedError, Equatable {
     }
 }
 
+/// Why an awake mode ended without the user turning it off, e.g. while they're away. Shown as a notification.
+enum AutoStop: Equatable {
+    /// The timer ran out. The associated mode is the one that ended.
+    case expired(SleepMode)
+    case safety(SafetyStop)
+    /// The helper went away during Stay Awake (Ignore Lid).
+    case helperLost
+
+    var title: String {
+        switch self {
+        case .expired(.lidClosed): "Stay Awake (Ignore Lid) ended"
+        case .expired: "Stay Awake ended"
+        case .safety: "Redeye is letting your Mac sleep"
+        case .helperLost: "Stay Awake (Ignore Lid) stopped"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .expired: "The timer ran out, so your Mac can sleep again."
+        case .safety(let stop): stop.localizedDescription
+        case .helperLost: "Redeye's helper stopped, so your Mac can sleep again."
+        }
+    }
+}
+
 /// Holds an IOKit power assertion, and in lid-closed mode the helper's `disablesleep`, plus the
 /// expiry timer. By default the display may sleep while the system stays awake (`caffeinate -i`).
 final class SleepPreventer {
@@ -107,8 +133,10 @@ final class SleepPreventer {
 
     /// Called whenever the mode changes (including timer expiry).
     var onChange: (() -> Void)?
-    /// Called when a mode couldn't start or stopped unexpectedly: the helper failed, or a Safety setting kicked in.
+    /// Called when a mode couldn't start: the helper failed, or a Safety setting refused it.
     var onError: ((Error) -> Void)?
+    /// Called after an active mode ended on its own: timer, Safety setting or lost helper.
+    var onAutoStop: ((AutoStop) -> Void)?
 
     init(
         defaults: UserDefaults = .standard,
@@ -122,8 +150,13 @@ final class SleepPreventer {
         sleepDisabler.onConnectionLost = { [weak self] in
             guard let self, askedHelperToDisable else { return }
             askedHelperToDisable = false
+            let wasLidClosed = mode == .lidClosed
             deactivate()
-            onError?(LidSleepError.failed("it stopped, so sleep is allowed again."))
+            if wasLidClosed {
+                onAutoStop?(.helperLost)
+            } else {
+                onError?(LidSleepError.failed("it stopped, so sleep is allowed again."))
+            }
         }
     }
 
@@ -152,10 +185,16 @@ final class SleepPreventer {
     }
 
     /// Stops and reports when a Safety setting says to, including while waiting for the helper.
+    /// Ending an active mode is an `AutoStop`; cancelling a start that's still waiting is an error.
     private func checkSafety() {
         guard isActive || askedHelperToDisable, let stop = safetyStop() else { return }
+        let wasActive = isActive
         deactivate()
-        onError?(stop)
+        if wasActive {
+            onAutoStop?(.safety(stop))
+        } else {
+            onError?(stop)
+        }
     }
 
     /// Start preventing sleep in the given mode for its default duration.
@@ -203,10 +242,16 @@ final class SleepPreventer {
             expiresAt = Date().addingTimeInterval(duration)
             // Scheduled on the main run loop, so it fires on the main thread.
             expiryTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.deactivate() }
+                MainActor.assumeIsolated { self?.expire() }
             }
         }
         onChange?()
+    }
+
+    private func expire() {
+        let ended = mode
+        deactivate()
+        onAutoStop?(.expired(ended))
     }
 
     func deactivate(notify: Bool = true) {

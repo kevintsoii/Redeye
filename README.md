@@ -10,6 +10,7 @@ Inspired by [KeepingYouAwake](https://github.com/newmarcel/KeepingYouAwake).
 - **Works with the lid closed.** Keep Claude running with your Mac in a bag.
 - **Timed sessions.** Right-click to stay awake forever or for 30 min, 1 hr, 6 hr, 12 hr or 24 hr. Left-click uses each mode's default: Forever for Stay Awake, 24 hours for Stay Awake (Ignore Lid). Change them in Settings > Stay Awake.
 - **Safety cutoffs.** Optional, in Settings > Safety: let the Mac sleep when the battery runs low or the Mac gets too hot. Off by default.
+- **Notifications.** Tells you when Redeye stops keeping your Mac awake on its own: a timer ran out, a Safety cutoff kicked in, or the Ignore Lid helper stopped. Turn them off in System Settings > Notifications.
 - **Keep screen on.** Optional, in Settings > Stay Awake. Off by default, so the screen turns off while your Mac keeps running.
 - **Launch at Login.** Optional, in Settings (right-click → Settings…).
 - **Scriptable.** Control it from the terminal or a script with the `redeye://` URL scheme.

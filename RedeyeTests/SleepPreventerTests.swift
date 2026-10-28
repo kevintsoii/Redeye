@@ -92,6 +92,33 @@ final class SleepPreventerTests: XCTestCase {
         XCTAssertFalse(hasRedeyeAssertion())
     }
 
+    func testExpiryReportsAutoStop() {
+        var stops: [AutoStop] = []
+        preventer.onAutoStop = { stops.append($0) }
+        preventer.activate(.lidClosed, for: 0.2)
+        runMainLoop(for: 0.5)
+        XCTAssertEqual(stops, [.expired(.lidClosed)])
+    }
+
+    func testDeactivatingIsNotAnAutoStop() {
+        var stops: [AutoStop] = []
+        preventer.onAutoStop = { stops.append($0) }
+        preventer.activate(for: 0.2)
+        preventer.deactivate()
+        preventer.activate(.lidClosed)
+        preventer.cycle()
+        runMainLoop(for: 0.4)
+        XCTAssertTrue(stops.isEmpty)
+    }
+
+    func testAutoStopMessages() {
+        XCTAssertEqual(AutoStop.expired(.awake).title, "Stay Awake ended")
+        XCTAssertEqual(AutoStop.expired(.lidClosed).title, "Stay Awake (Ignore Lid) ended")
+        XCTAssertEqual(AutoStop.helperLost.title, "Stay Awake (Ignore Lid) stopped")
+        XCTAssertEqual(AutoStop.safety(.tooHot).message, SafetyStop.tooHot.localizedDescription)
+        XCTAssertTrue(AutoStop.safety(.lowBattery(30)).message.contains("30%"))
+    }
+
     func testIndefiniteDoesNotExpire() {
         preventer.activate()
         runMainLoop(for: 0.5)
@@ -256,12 +283,28 @@ final class SleepPreventerTests: XCTestCase {
 
     func testLosingHelperConnectionStopsLidClosedMode() {
         var errors: [Error] = []
+        var stops: [AutoStop] = []
         preventer.onError = { errors.append($0) }
+        preventer.onAutoStop = { stops.append($0) }
         preventer.activate(.lidClosed)
         helper.onConnectionLost?()
         XCTAssertEqual(preventer.mode, .off)
         XCTAssertFalse(hasRedeyeAssertion())
+        XCTAssertEqual(stops, [.helperLost])
+        XCTAssertTrue(errors.isEmpty)
+    }
+
+    func testLosingHelperConnectionWhileStartingIsAnError() {
+        var errors: [Error] = []
+        var stops: [AutoStop] = []
+        preventer.onError = { errors.append($0) }
+        preventer.onAutoStop = { stops.append($0) }
+        helper.holdReplies = true
+        preventer.activate(.lidClosed)
+        helper.onConnectionLost?()
+        XCTAssertEqual(preventer.mode, .off)
         XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(stops.isEmpty)
     }
 
     func testLosingHelperConnectionWhileAwakeIsIgnored() {
@@ -354,8 +397,8 @@ final class SleepPreventerTests: XCTestCase {
     }
 
     func testBatteryCutoffStopsBelowThreshold() {
-        var errors: [Error] = []
-        preventer.onError = { errors.append($0) }
+        var stops: [AutoStop] = []
+        preventer.onAutoStop = { stops.append($0) }
         preventer.batteryCutoff = true
         power.state = PowerState(batteryPercent: 25, onBattery: true, thermalState: .nominal)
         preventer.activate(.lidClosed)
@@ -367,7 +410,7 @@ final class SleepPreventerTests: XCTestCase {
         XCTAssertEqual(preventer.mode, .off)
         XCTAssertFalse(helper.sleepDisabled)
         XCTAssertFalse(hasRedeyeAssertion())
-        XCTAssertEqual(errors as? [SafetyStop], [.lowBattery(20)])
+        XCTAssertEqual(stops, [.safety(.lowBattery(20))])
     }
 
     func testBatteryCutoffIgnoredWhileCharging() {
@@ -398,8 +441,8 @@ final class SleepPreventerTests: XCTestCase {
     }
 
     func testHeatCutoffStopsWhenSeriousOrCritical() {
-        var errors: [Error] = []
-        preventer.onError = { errors.append($0) }
+        var stops: [AutoStop] = []
+        preventer.onAutoStop = { stops.append($0) }
         preventer.heatCutoff = true
         preventer.activate(.lidClosed)
         power.state.thermalState = .fair
@@ -408,14 +451,18 @@ final class SleepPreventerTests: XCTestCase {
         XCTAssertEqual(preventer.mode, .off)
         XCTAssertFalse(helper.sleepDisabled)
 
+        power.state.thermalState = .nominal
         preventer.activate()
         power.state.thermalState = .critical
-        XCTAssertEqual(errors as? [SafetyStop], [.tooHot, .tooHot])
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertEqual(stops, [.safety(.tooHot), .safety(.tooHot)])
     }
 
     func testActivatingWhenUnsafeIsRefused() {
         var errors: [Error] = []
+        var stops: [AutoStop] = []
         preventer.onError = { errors.append($0) }
+        preventer.onAutoStop = { stops.append($0) }
         preventer.heatCutoff = true
         power.state.thermalState = .serious
         preventer.cycle()
@@ -423,6 +470,7 @@ final class SleepPreventerTests: XCTestCase {
         XCTAssertEqual(helper.requests, [], "the helper isn't even asked")
         XCTAssertFalse(hasRedeyeAssertion())
         XCTAssertEqual(errors as? [SafetyStop], [.tooHot])
+        XCTAssertTrue(stops.isEmpty, "refusing a start is an alert, not a notification")
     }
 
     func testTurningOnCutoffWhenAlreadyUnsafeStops() {
@@ -433,6 +481,8 @@ final class SleepPreventerTests: XCTestCase {
     }
 
     func testSafetyCancelsPendingLidClosedRequest() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
         helper.holdReplies = true
         preventer.heatCutoff = true
         preventer.activate(.lidClosed)
@@ -441,14 +491,18 @@ final class SleepPreventerTests: XCTestCase {
         XCTAssertEqual(preventer.mode, .off)
         XCTAssertEqual(helper.requests, [true, false])
         XCTAssertFalse(helper.sleepDisabled)
+        XCTAssertEqual(errors as? [SafetyStop], [.tooHot])
     }
 
     func testSafetyIgnoredWhileSleepingNormally() {
         var errors: [Error] = []
+        var stops: [AutoStop] = []
         preventer.onError = { errors.append($0) }
+        preventer.onAutoStop = { stops.append($0) }
         preventer.heatCutoff = true
         power.state.thermalState = .critical
         XCTAssertTrue(errors.isEmpty)
+        XCTAssertTrue(stops.isEmpty)
     }
 
     func testRealPowerMonitorReadsState() {
