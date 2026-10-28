@@ -30,6 +30,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preventer.deactivate(notify: false)
     }
 
+    // MARK: - URL scheme
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(handle)
+    }
+
+    func handle(_ url: URL) {
+        guard let command = URLCommand(url: url) else {
+            NSLog("Redeye: ignoring unrecognized URL \(url.absoluteString)")
+            return
+        }
+        switch command {
+        case .activate(let duration): preventer.activate(for: duration)
+        case .deactivate: preventer.deactivate()
+        case .toggle: preventer.toggle()
+        }
+    }
+
     // MARK: - Status item
 
     @objc private func statusItemClicked() {

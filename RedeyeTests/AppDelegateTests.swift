@@ -109,6 +109,40 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertFalse(hasRedeyeAssertion())
     }
 
+    // MARK: - URL scheme
+
+    func testURLActivateForDuration() throws {
+        delegate.handle(URL(string: "redeye://activate?minutes=30")!)
+        XCTAssertTrue(delegate.preventer.isActive)
+        let expiresAt = try XCTUnwrap(delegate.preventer.expiresAt)
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 30 * 60, accuracy: 2)
+        XCTAssertEqual(redeyeAssertionCount(), 1)
+    }
+
+    func testURLActivateIndefinitelyAndDeactivate() {
+        delegate.application(NSApp, open: [URL(string: "redeye://activate")!])
+        XCTAssertTrue(delegate.preventer.isActive)
+        XCTAssertNil(delegate.preventer.expiresAt)
+
+        delegate.application(NSApp, open: [URL(string: "redeye://deactivate")!])
+        XCTAssertFalse(delegate.preventer.isActive)
+        XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testURLToggle() {
+        delegate.handle(URL(string: "redeye://toggle")!)
+        XCTAssertTrue(delegate.preventer.isActive)
+        delegate.handle(URL(string: "redeye://toggle")!)
+        XCTAssertFalse(delegate.preventer.isActive)
+    }
+
+    func testUnrecognizedURLChangesNothing() {
+        delegate.preventer.activate()
+        delegate.handle(URL(string: "redeye://activate?minutes=never")!)
+        XCTAssertTrue(delegate.preventer.isActive)
+        XCTAssertNil(delegate.preventer.expiresAt)
+    }
+
     // MARK: - Status text
 
     func testStatusTextWhenSleepAllowed() {

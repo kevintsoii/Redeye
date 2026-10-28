@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - MIT license.
+- `redeye://` URL scheme for scripts and the terminal: `open -g redeye://activate`, `redeye://deactivate` and `redeye://toggle`. `activate` takes optional `seconds`, `minutes` and `hours` (e.g. `redeye://activate?hours=2`).
+- Only one copy of Redeye runs at a time. Opening a second copy quits it, so there's never a second menu bar icon.
 
 ## [1.0.0] - 2026-10-27
 

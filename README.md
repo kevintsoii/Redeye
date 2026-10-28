@@ -9,6 +9,7 @@ Inspired by [KeepingYouAwake](https://github.com/newmarcel/KeepingYouAwake).
 - **One click to toggle.** Left-click the sunrise icon to keep your Mac awake; click again to allow sleep.
 - **Timed sessions.** Right-click to stay awake forever or for 30 min, 1 hr, 6 hr, 12 hr or 24 hr.
 - **Launch at Login.** Optional, in Settings (right-click → Settings…).
+- **Scriptable.** Control it from the terminal or a script with the `redeye://` URL scheme.
 - **Menu bar only.** No Dock icon, no windows.
 
 ## Requirements
@@ -36,6 +37,17 @@ See [DEVELOPING.md](DEVELOPING.md) for project details.
 | Right-click / Ctrl-click | Open the menu |
 
 A filled sunrise means your Mac is being kept awake.
+
+### From the terminal
+
+```sh
+open -g redeye://activate              # keep awake indefinitely
+open -g "redeye://activate?hours=2"    # for 2 hours (also seconds=, minutes=; they add up)
+open -g redeye://deactivate            # allow sleep
+open -g redeye://toggle
+```
+
+`-g` keeps the current app in front. Redeye is launched if it isn't already running.
 
 ## Notes
 
