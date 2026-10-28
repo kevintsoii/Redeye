@@ -10,14 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         super.init()
     }
 
-    private let durations: [(String, TimeInterval?)] = [
-        ("Forever", nil),
-        ("30 Minutes", 30 * 60),
-        ("1 Hour", 60 * 60),
-        ("6 Hours", 6 * 60 * 60),
-        ("12 Hours", 12 * 60 * 60),
-        ("24 Hours", 24 * 60 * 60),
-    ]
+    private let durations = SleepPreventer.durations
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -49,7 +42,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         switch command {
-        case .activate(let duration, let lidClosed): preventer.activate(lidClosed ? .lidClosed : .awake, for: duration)
+        case .activate(let duration, let lidClosed):
+            let mode: SleepMode = lidClosed ? .lidClosed : .awake
+            switch duration {
+            case .modeDefault: preventer.activate(mode)
+            case .forever: preventer.activate(mode, for: nil)
+            case .timed(let seconds): preventer.activate(mode, for: seconds)
+            }
         case .deactivate: preventer.deactivate()
         case .toggle: preventer.toggle()
         }
@@ -101,7 +100,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func showError(_ error: Error) {
         let needsApproval = if case LidSleepError.needsApproval = error { true } else { false }
         let alert = NSAlert()
-        alert.messageText = needsApproval ? "Allow Redeye in System Settings" : "Stay Awake (Ignore Lid) stopped"
+        alert.messageText = if needsApproval {
+            "Allow Redeye in System Settings"
+        } else if error is SafetyStop {
+            "Redeye is letting your Mac sleep"
+        } else {
+            "Stay Awake (Ignore Lid) stopped"
+        }
         alert.informativeText = error.localizedDescription
         if needsApproval {
             alert.addButton(withTitle: "Open System Settings")
@@ -177,11 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func activateForDuration(_ sender: NSMenuItem) {
-        preventer.activate(.awake, for: durations[sender.tag].1)
+        preventer.activate(.awake, for: durations[sender.tag].duration)
     }
 
     @objc private func activateLidClosedForDuration(_ sender: NSMenuItem) {
-        preventer.activate(.lidClosed, for: durations[sender.tag].1)
+        preventer.activate(.lidClosed, for: durations[sender.tag].duration)
     }
 
     @objc private func openSettings() {

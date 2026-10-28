@@ -7,10 +7,11 @@ final class SleepPreventerTests: XCTestCase {
     /// A fresh preventer per test, released afterwards so assertions don't leak between tests.
     private lazy var preventer = makePreventer()
     private lazy var helper = FakeSleepDisabler()
+    private lazy var power = FakePowerMonitor()
     private lazy var defaults = makeTestDefaults(for: self)
 
     private func makePreventer() -> SleepPreventer {
-        let preventer = SleepPreventer(defaults: defaults, sleepDisabler: helper)
+        let preventer = SleepPreventer(defaults: defaults, sleepDisabler: helper, powerMonitor: power)
         addTeardownBlock { @MainActor in preventer.deactivate(notify: false) }
         return preventer
     }
@@ -109,7 +110,7 @@ final class SleepPreventerTests: XCTestCase {
     func testToggle() {
         preventer.toggle()
         XCTAssertTrue(preventer.isActive)
-        XCTAssertNil(preventer.expiresAt, "toggling on is indefinite")
+        XCTAssertNil(preventer.expiresAt, "Stay Awake defaults to Forever")
         preventer.toggle()
         XCTAssertFalse(preventer.isActive)
         XCTAssertFalse(hasRedeyeAssertion())
@@ -172,7 +173,14 @@ final class SleepPreventerTests: XCTestCase {
             seen.append(preventer.mode)
         }
         XCTAssertEqual(seen, [.awake, .lidClosed, .off, .awake])
-        XCTAssertNil(preventer.expiresAt, "cycling is indefinite")
+    }
+
+    func testCycleUsesEachModesDefaultDuration() throws {
+        preventer.cycle()
+        XCTAssertNil(preventer.expiresAt, "Stay Awake defaults to Forever")
+        preventer.cycle()
+        let expiresAt = try XCTUnwrap(preventer.expiresAt, "Stay Awake (Ignore Lid) defaults to 24 hours")
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 24 * 60 * 60, accuracy: 2)
     }
 
     func testAwakeDoesNotUseHelper() {
@@ -296,5 +304,159 @@ final class SleepPreventerTests: XCTestCase {
         preventer.keepDisplayOn = true
         XCTAssertTrue(defaults.bool(forKey: SleepPreventer.keepDisplayOnKey))
         XCTAssertTrue(makePreventer().keepDisplayOn)
+    }
+
+    // MARK: - Default durations
+
+    func testFactoryDefaultDurations() {
+        XCTAssertNil(preventer.defaultDuration(for: .awake))
+        XCTAssertEqual(preventer.defaultDuration(for: .lidClosed), 24 * 60 * 60)
+    }
+
+    func testActivateWithoutDurationUsesDefault() throws {
+        preventer.activate(.lidClosed)
+        let expiresAt = try XCTUnwrap(preventer.expiresAt)
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 24 * 60 * 60, accuracy: 2)
+    }
+
+    func testExplicitForeverOverridesDefault() {
+        preventer.activate(.lidClosed, for: nil)
+        XCTAssertEqual(preventer.mode, .lidClosed)
+        XCTAssertNil(preventer.expiresAt)
+    }
+
+    func testChangedDefaultDurationsAreUsedAndSaved() throws {
+        preventer.setDefaultDuration(60 * 60, for: .awake)
+        preventer.setDefaultDuration(nil, for: .lidClosed)
+        XCTAssertEqual(makePreventer().defaultDuration(for: .awake), 60 * 60)
+        XCTAssertNil(makePreventer().defaultDuration(for: .lidClosed), "Forever is saved, not reset to 24 hours")
+
+        preventer.toggle()
+        let expiresAt = try XCTUnwrap(preventer.expiresAt)
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 60 * 60, accuracy: 2)
+        preventer.cycle()
+        XCTAssertEqual(preventer.mode, .lidClosed)
+        XCTAssertNil(preventer.expiresAt)
+    }
+
+    // MARK: - Safety
+
+    func testSafetyCutoffsAreOffByDefault() {
+        XCTAssertFalse(preventer.batteryCutoff)
+        XCTAssertFalse(preventer.heatCutoff)
+        XCTAssertEqual(preventer.batteryCutoffPercent, 20)
+
+        power.state = PowerState(batteryPercent: 5, onBattery: true, thermalState: .critical)
+        preventer.activate(.lidClosed)
+        XCTAssertEqual(preventer.mode, .lidClosed)
+        power.state.batteryPercent = 4
+        XCTAssertEqual(preventer.mode, .lidClosed)
+    }
+
+    func testBatteryCutoffStopsBelowThreshold() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.batteryCutoff = true
+        power.state = PowerState(batteryPercent: 25, onBattery: true, thermalState: .nominal)
+        preventer.activate(.lidClosed)
+        XCTAssertEqual(preventer.mode, .lidClosed)
+
+        power.state.batteryPercent = 20
+        XCTAssertEqual(preventer.mode, .lidClosed, "at the cutoff isn't below it")
+        power.state.batteryPercent = 19
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertFalse(helper.sleepDisabled)
+        XCTAssertFalse(hasRedeyeAssertion())
+        XCTAssertEqual(errors as? [SafetyStop], [.lowBattery(20)])
+    }
+
+    func testBatteryCutoffIgnoredWhileCharging() {
+        preventer.batteryCutoff = true
+        power.state = PowerState(batteryPercent: 5, onBattery: false, thermalState: .nominal)
+        preventer.activate()
+        XCTAssertEqual(preventer.mode, .awake)
+
+        power.state.onBattery = true  // unplugged
+        XCTAssertEqual(preventer.mode, .off)
+    }
+
+    func testBatteryCutoffIgnoredWithoutBattery() {
+        preventer.batteryCutoff = true
+        power.state = PowerState(batteryPercent: nil, onBattery: false, thermalState: .nominal)
+        preventer.activate()
+        XCTAssertEqual(preventer.mode, .awake)
+    }
+
+    func testBatteryCutoffPercentIsUsedAndSaved() {
+        preventer.batteryCutoff = true
+        preventer.batteryCutoffPercent = 50
+        XCTAssertEqual(makePreventer().batteryCutoffPercent, 50)
+        XCTAssertTrue(makePreventer().batteryCutoff)
+        power.state = PowerState(batteryPercent: 45, onBattery: true, thermalState: .nominal)
+        preventer.activate()
+        XCTAssertEqual(preventer.mode, .off)
+    }
+
+    func testHeatCutoffStopsWhenSeriousOrCritical() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.heatCutoff = true
+        preventer.activate(.lidClosed)
+        power.state.thermalState = .fair
+        XCTAssertEqual(preventer.mode, .lidClosed)
+        power.state.thermalState = .serious
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertFalse(helper.sleepDisabled)
+
+        preventer.activate()
+        power.state.thermalState = .critical
+        XCTAssertEqual(errors as? [SafetyStop], [.tooHot, .tooHot])
+    }
+
+    func testActivatingWhenUnsafeIsRefused() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.heatCutoff = true
+        power.state.thermalState = .serious
+        preventer.cycle()
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertEqual(helper.requests, [], "the helper isn't even asked")
+        XCTAssertFalse(hasRedeyeAssertion())
+        XCTAssertEqual(errors as? [SafetyStop], [.tooHot])
+    }
+
+    func testTurningOnCutoffWhenAlreadyUnsafeStops() {
+        power.state = PowerState(batteryPercent: 10, onBattery: true, thermalState: .nominal)
+        preventer.activate()
+        preventer.batteryCutoff = true
+        XCTAssertEqual(preventer.mode, .off)
+    }
+
+    func testSafetyCancelsPendingLidClosedRequest() {
+        helper.holdReplies = true
+        preventer.heatCutoff = true
+        preventer.activate(.lidClosed)
+        power.state.thermalState = .critical
+        helper.reply()
+        XCTAssertEqual(preventer.mode, .off)
+        XCTAssertEqual(helper.requests, [true, false])
+        XCTAssertFalse(helper.sleepDisabled)
+    }
+
+    func testSafetyIgnoredWhileSleepingNormally() {
+        var errors: [Error] = []
+        preventer.onError = { errors.append($0) }
+        preventer.heatCutoff = true
+        power.state.thermalState = .critical
+        XCTAssertTrue(errors.isEmpty)
+    }
+
+    func testRealPowerMonitorReadsState() {
+        let state = PowerMonitor().state
+        if let percent = state.batteryPercent {
+            XCTAssertTrue((0...100).contains(percent))
+        } else {
+            XCTAssertFalse(state.onBattery, "no battery but running on one")
+        }
     }
 }

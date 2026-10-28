@@ -8,6 +8,7 @@ final class SettingsWindowController: NSWindowController {
         tabs.tabStyle = .toolbar
         tabs.addTabViewItem(Self.tab(GeneralSettingsViewController(), "General", "gearshape"))
         tabs.addTabViewItem(Self.tab(StayAwakeSettingsViewController(preventer: preventer), "Stay Awake", "sun.horizon"))
+        tabs.addTabViewItem(Self.tab(SafetySettingsViewController(preventer: preventer), "Safety", "checkmark.shield"))
         tabs.addTabViewItem(Self.tab(AboutViewController(), "About", "info.circle"))
 
         let window = NSWindow(contentViewController: tabs)
@@ -82,6 +83,11 @@ final class GeneralSettingsViewController: NSViewController {
 final class StayAwakeSettingsViewController: NSViewController {
     private let preventer: SleepPreventer
     private let keepDisplayOn = NSButton(checkboxWithTitle: "Keep screen on while staying awake", target: nil, action: nil)
+    /// Default duration pickers, one per awake mode.
+    private let durationPopUps: [(mode: SleepMode, popUp: NSPopUpButton)] = [
+        (.awake, NSPopUpButton()),
+        (.lidClosed, NSPopUpButton()),
+    ]
 
     init(preventer: SleepPreventer) {
         self.preventer = preventer
@@ -97,17 +103,112 @@ final class StayAwakeSettingsViewController: NSViewController {
         keepDisplayOn.target = self
         keepDisplayOn.action = #selector(toggleKeepDisplayOn)
 
-        view = paddedStack([keepDisplayOn, hint("When on, the screen doesn't sleep due to inactivity.")], width: 420)
+        let rows = durationPopUps.map { mode, popUp in
+            popUp.addItems(withTitles: SleepPreventer.durations.map(\.title))
+            popUp.target = self
+            popUp.action = #selector(changeDefaultDuration(_:))
+            let label = NSTextField(labelWithString: mode == .lidClosed ? "Stay Awake (Ignore Lid):" : "Stay Awake:")
+            return [label, popUp]
+        }
+        let grid = NSGridView(views: rows)
+        grid.column(at: 0).xPlacement = .trailing
+        grid.rowAlignment = .firstBaseline
+
+        let heading = NSTextField(labelWithString: "Default durations")
+        heading.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+
+        let displayHint = hint("When on, the screen doesn't sleep due to inactivity.")
+        view = paddedStack([
+            keepDisplayOn,
+            displayHint,
+            heading,
+            grid,
+            hint("Used when you left-click the menu bar icon."),
+        ], width: 420, gapAfter: [displayHint])
         preferredContentSize = view.fittingSize
     }
 
     override func viewWillAppear() {
         super.viewWillAppear()
         keepDisplayOn.state = preventer.keepDisplayOn ? .on : .off
+        for (mode, popUp) in durationPopUps {
+            let current = preventer.defaultDuration(for: mode)
+            popUp.selectItem(at: SleepPreventer.durations.firstIndex { $0.duration == current } ?? -1)
+        }
     }
 
     @objc private func toggleKeepDisplayOn() {
         preventer.keepDisplayOn = keepDisplayOn.state == .on
+    }
+
+    @objc private func changeDefaultDuration(_ sender: NSPopUpButton) {
+        guard let mode = durationPopUps.first(where: { $0.popUp === sender })?.mode,
+              SleepPreventer.durations.indices.contains(sender.indexOfSelectedItem)
+        else { return }
+        preventer.setDefaultDuration(SleepPreventer.durations[sender.indexOfSelectedItem].duration, for: mode)
+    }
+}
+
+// MARK: - Safety
+
+final class SafetySettingsViewController: NSViewController {
+    private let preventer: SleepPreventer
+    private let batteryCutoff = NSButton(checkboxWithTitle: "Let the Mac sleep when the battery is below", target: nil, action: nil)
+    private let batteryPercent = NSPopUpButton()
+    private let heatCutoff = NSButton(checkboxWithTitle: "Let the Mac sleep when it gets too hot", target: nil, action: nil)
+
+    init(preventer: SleepPreventer) {
+        self.preventer = preventer
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func loadView() {
+        batteryCutoff.target = self
+        batteryCutoff.action = #selector(toggleBatteryCutoff)
+        batteryPercent.addItems(withTitles: SleepPreventer.batteryCutoffPercents.map { "\($0)%" })
+        batteryPercent.target = self
+        batteryPercent.action = #selector(changeBatteryPercent)
+        heatCutoff.target = self
+        heatCutoff.action = #selector(toggleHeatCutoff)
+
+        let batteryRow = NSStackView(views: [batteryCutoff, batteryPercent])
+        batteryRow.alignment = .firstBaseline
+
+        let batteryHint = hint("Only while running on battery, not while charging.")
+        view = paddedStack([
+            batteryRow,
+            batteryHint,
+            heatCutoff,
+            hint("When macOS reports serious or critical heat."),
+        ], width: 420, gapAfter: [batteryHint])
+        preferredContentSize = view.fittingSize
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        batteryCutoff.state = preventer.batteryCutoff ? .on : .off
+        batteryPercent.selectItem(at: SleepPreventer.batteryCutoffPercents.firstIndex(of: preventer.batteryCutoffPercent) ?? -1)
+        batteryPercent.isEnabled = preventer.batteryCutoff
+        heatCutoff.state = preventer.heatCutoff ? .on : .off
+    }
+
+    @objc private func toggleBatteryCutoff() {
+        preventer.batteryCutoff = batteryCutoff.state == .on
+        batteryPercent.isEnabled = preventer.batteryCutoff
+    }
+
+    @objc private func changeBatteryPercent() {
+        guard SleepPreventer.batteryCutoffPercents.indices.contains(batteryPercent.indexOfSelectedItem) else { return }
+        preventer.batteryCutoffPercent = SleepPreventer.batteryCutoffPercents[batteryPercent.indexOfSelectedItem]
+    }
+
+    @objc private func toggleHeatCutoff() {
+        preventer.heatCutoff = heatCutoff.state == .on
     }
 }
 
@@ -152,12 +253,14 @@ private func hint(_ text: String) -> NSTextField {
     return hint
 }
 
-/// A vertical stack with standard window padding, at a fixed content width.
-private func paddedStack(_ views: [NSView], width: CGFloat) -> NSView {
+/// A vertical stack with standard window padding, at a fixed content width. `gapAfter` views get
+/// extra space below them, to separate groups of settings.
+private func paddedStack(_ views: [NSView], width: CGFloat, gapAfter: [NSView] = []) -> NSView {
     let stack = NSStackView(views: views)
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 8
+    gapAfter.forEach { stack.setCustomSpacing(20, after: $0) }
     stack.translatesAutoresizingMaskIntoConstraints = false
 
     let container = NSView()

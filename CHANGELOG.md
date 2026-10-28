@@ -14,8 +14,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Left-click now steps through three modes: Sleep Normally (outline sun), Stay Awake (yellow sun), Stay Awake (Ignore Lid) (red sun).
 - Stay Awake (Ignore Lid) submenu with the same durations as Stay Awake.
 - Keep screen on while staying awake setting in a new Stay Awake tab in Settings: keeps the screen on too, like `caffeinate -d`. Off by default.
-- Renamed the menu items: Keep Awake is now Stay Awake, and Allow Sleep is now Sleep Normally. The status line reads "Sleeping Normally", "Staying Awake Forever" or "Staying Awake Until 3:45 PM".
 - `lid=1` parameter for the URL scheme: `open -g "redeye://activate?lid=1"`.
+- Default durations for left-click in Settings > Stay Awake: Forever for Stay Awake, 24 hours for Stay Awake (Ignore Lid).
+- Safety tab in Settings: let the Mac sleep when the battery is low or the Mac gets too hot. Both off by default.
 
 ## [1.0.0] - 2026-10-27
 

@@ -9,7 +9,7 @@
 
 - Swift 6, AppKit (no SwiftUI)
 - Xcode project with an app target (`Redeye`, macOS 13+) and a hosted unit-test target (`RedeyeTests`, macOS 14+ because XCTest requires it)
-- Apple frameworks only: AppKit, IOKit (power assertions), ServiceManagement (Launch at Login, the privileged helper), XPC (`NSXPCConnection`)
+- Apple frameworks only: AppKit, IOKit (power assertions, battery), ServiceManagement (Launch at Login, the privileged helper), XPC (`NSXPCConnection`)
 - A second target, `RedeyeHelper`: a command-line tool embedded in the app that runs as root for Stay Awake (Ignore Lid)
 - No third-party dependencies
 
@@ -20,8 +20,9 @@ Redeye.xcodeproj/        project and shared "Redeye" scheme
 Redeye/
   main.swift            app startup
   AppDelegate.swift     menu bar icon, menu, actions
-  SettingsWindowController.swift  Settings window (General, Stay Awake, About tabs)
-  SleepPreventer.swift  sleep modes, IOKit power assertion and timer
+  SettingsWindowController.swift  Settings window (General, Stay Awake, Safety, About tabs)
+  SleepPreventer.swift  sleep modes, IOKit power assertion, timer, default durations, Safety cutoffs
+  PowerMonitor.swift    battery level, power source and thermal state for the Safety cutoffs
   LidSleepHelper.swift  registers and talks to the privileged helper
   URLCommand.swift      parses redeye:// URLs
   SingleInstance.swift  quits a second copy at launch
@@ -34,13 +35,13 @@ Shared/
   HelperProtocol.swift  XPC protocol, compiled into both the app and the helper
   HelperSleepState.swift  the helper's bookkeeping, compiled into the helper and the tests
 RedeyeTests/            unit tests (XCTest)
-  SleepPreventerTests.swift            modes, power assertion, timer, helper requests, Keep screen on
+  SleepPreventerTests.swift            modes, power assertion, timer, helper requests, Keep screen on, default durations, Safety cutoffs
   HelperSleepStateTests.swift          the helper's bookkeeping: disconnects, retries, failed pmset
   AppDelegateTests.swift               menu, menu actions, URL handling, status icon, quitting
   URLCommandTests.swift                URL parsing, scheme registration
   SingleInstanceTests.swift            finding other running copies
-  SettingsWindowControllerTests.swift  Settings window, tabs, Keep screen on, About version
-  TestHelpers.swift                    shared helpers (reading assertions from powerd, view search, fake helper)
+  SettingsWindowControllerTests.swift  Settings window, tabs, Keep screen on, default durations, Safety, About version
+  TestHelpers.swift                    shared helpers (reading assertions from powerd, view search, fake helper, fake power monitor)
 ```
 
 The app target embeds `RedeyeHelper` in `Contents/MacOS` and the launchd plist in `Contents/Library/LaunchDaemons` with two Copy Files build phases.
@@ -70,7 +71,7 @@ killall Redeye; xcodebuild -project Redeye.xcodeproj -scheme Redeye -derivedData
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same tests plus a Release build on a `macos-26` runner for every push to `main` and every pull request. When a run fails, the `.xcresult` bundle is uploaded as an artifact.
 
-Tests use `FakeSleepDisabler` in place of the helper, so they never change the real `disablesleep`.
+Tests use `FakeSleepDisabler` in place of the helper, so they never change the real `disablesleep`, and `FakePowerMonitor` in place of the real battery and thermal readings.
 
 Possible things to check by hand before a release:
 
@@ -78,7 +79,8 @@ Possible things to check by hand before a release:
 2. In the yellow mode, run `pmset -g assertions`. Redeye should be listed under `PreventUserIdleSystemSleep` (`PreventUserIdleDisplaySleep` with Keep screen on).
 3. In the red mode, `pmset -g | grep SleepDisabled` should show 1. Run `killall -9 Redeye`; within a couple of seconds it should be back to 0. Repeat with Quit Redeye from the menu, `kill -TERM`, `kill -SEGV`, a timed session ending, and switching to another mode; each should leave `SleepDisabled` at 0 and no Redeye entry in `pmset -g assertions`.
 4. Run `open -g "redeye://activate?minutes=5"`, `open -g redeye://toggle` and `open -g redeye://deactivate` and check the icon each time.
-5. Open a second copy (`build/Build/Products/Release/Redeye.app/Contents/MacOS/Redeye`). It should quit right away with "another copy is already running".
+5. Turn on the battery cutoff in Settings > Safety, set it above the current charge, unplug the charger and choose Stay Awake. Redeye should refuse with an alert and stay on the outline icon. Plug back in and it should work again.
+6. Open a second copy (`build/Build/Products/Release/Redeye.app/Contents/MacOS/Redeye`). It should quit right away with "another copy is already running".
 
 ## Single copy and the URL scheme
 
@@ -87,6 +89,12 @@ Possible things to check by hand before a release:
 ```sh
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u build/Build/Products/Debug/Redeye.app
 ```
+
+## Default durations and Safety
+
+Left-click, `redeye://toggle` and `redeye://activate` without a duration use `SleepPreventer.defaultDuration(for:)`: saved per mode as `awakeDefaultDuration` / `lidClosedDefaultDuration` (seconds, 0 for Forever); when unset, Forever for Stay Awake and 24 hours for Stay Awake (Ignore Lid). Menu items pass their duration explicitly, and so does a URL with a time or `forever=1` (`URLCommand.Duration`: `.modeDefault`, `.forever`, `.timed`).
+
+The Safety cutoffs (`batteryCutoff`, `batteryCutoffPercent`, `heatCutoff` defaults, all off) are checked when a mode starts and whenever `PowerMonitor` reports a change: IOKit's `kIOPSNotifyAnyPowerSource` for the battery and charger, `ProcessInfo.thermalStateDidChangeNotification` for heat (serious or critical counts as too hot). The battery cutoff only applies on battery power. When one triggers, the preventer switches to Sleep Normally and reports a `SafetyStop` through `onError`, which the app shows as an alert.
 
 ## Stay Awake (Ignore Lid) and the helper
 

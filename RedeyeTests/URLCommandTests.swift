@@ -4,32 +4,43 @@ import XCTest
 @MainActor
 final class URLCommandTests: XCTestCase {
     func testCommands() {
-        XCTAssertEqual(command("redeye://activate"), .activate(nil))
+        XCTAssertEqual(command("redeye://activate"), .activate())
         XCTAssertEqual(command("redeye://deactivate"), .deactivate)
         XCTAssertEqual(command("redeye://toggle"), .toggle)
     }
 
     func testKeepingYouAwakeStyleAndCase() {
-        XCTAssertEqual(command("redeye:///activate"), .activate(nil))
+        XCTAssertEqual(command("redeye:///activate"), .activate())
         XCTAssertEqual(command("redeye:///toggle/"), .toggle)
         XCTAssertEqual(command("REDEYE://Deactivate"), .deactivate)
     }
 
     func testDurations() {
-        XCTAssertEqual(command("redeye://activate?seconds=90"), .activate(90))
-        XCTAssertEqual(command("redeye://activate?minutes=30"), .activate(30 * 60))
-        XCTAssertEqual(command("redeye://activate?hours=1.5"), .activate(90 * 60))
-        XCTAssertEqual(command("redeye://activate?hours=1&minutes=30&seconds=5"), .activate(90 * 60 + 5))
-        XCTAssertEqual(command("redeye://activate?other=1"), .activate(nil), "unknown parameters are ignored")
+        XCTAssertEqual(command("redeye://activate?seconds=90"), .activate(.timed(90)))
+        XCTAssertEqual(command("redeye://activate?minutes=30"), .activate(.timed(30 * 60)))
+        XCTAssertEqual(command("redeye://activate?hours=1.5"), .activate(.timed(90 * 60)))
+        XCTAssertEqual(command("redeye://activate?hours=1&minutes=30&seconds=5"), .activate(.timed(90 * 60 + 5)))
+        XCTAssertEqual(command("redeye://activate?other=1"), .activate(), "unknown parameters are ignored")
     }
 
     func testLidClosed() {
-        XCTAssertEqual(command("redeye://activate?lid=1"), .activate(nil, lidClosed: true))
-        XCTAssertEqual(command("redeye://activate?lid=true&hours=2"), .activate(2 * 60 * 60, lidClosed: true))
-        XCTAssertEqual(command("redeye://activate?LID=yes"), .activate(nil, lidClosed: true))
-        XCTAssertEqual(command("redeye://activate?lid=0"), .activate(nil))
+        XCTAssertEqual(command("redeye://activate?lid=1"), .activate(lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?lid=true&hours=2"), .activate(.timed(2 * 60 * 60), lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?LID=yes"), .activate(lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?lid=0"), .activate())
         XCTAssertNil(command("redeye://activate?lid=maybe"))
         XCTAssertNil(command("redeye://activate?lid"))
+    }
+
+    func testForever() {
+        XCTAssertEqual(command("redeye://activate?forever=1"), .activate(.forever))
+        XCTAssertEqual(command("redeye://activate?lid=1&forever=true"), .activate(.forever, lidClosed: true))
+        XCTAssertEqual(command("redeye://activate?FOREVER=yes"), .activate(.forever))
+        XCTAssertEqual(command("redeye://activate?forever=0"), .activate(), "forever=0 means the mode's default")
+        XCTAssertEqual(command("redeye://activate?forever=0&hours=2"), .activate(.timed(2 * 60 * 60)))
+        XCTAssertNil(command("redeye://activate?forever=1&hours=2"), "forever and a time contradict each other")
+        XCTAssertNil(command("redeye://activate?forever=sometimes"))
+        XCTAssertNil(command("redeye://activate?forever"))
     }
 
     func testInvalidURLs() {

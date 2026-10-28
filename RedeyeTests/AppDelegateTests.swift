@@ -7,7 +7,8 @@ final class AppDelegateTests: XCTestCase {
     /// A delegate that hasn't launched, so it has no status item. Enough for the menu.
     private lazy var helper = FakeSleepDisabler()
     private lazy var delegate: AppDelegate = {
-        let preventer = SleepPreventer(defaults: makeTestDefaults(for: self), sleepDisabler: helper)
+        let preventer = SleepPreventer(
+            defaults: makeTestDefaults(for: self), sleepDisabler: helper, powerMonitor: FakePowerMonitor())
         let delegate = AppDelegate(preventer: preventer)
         addTeardownBlock { @MainActor in delegate.preventer.deactivate(notify: false) }
         return delegate
@@ -152,6 +153,36 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertFalse(hasRedeyeAssertion())
     }
 
+    func testURLActivateUsesDefaultDurations() throws {
+        delegate.handle(URL(string: "redeye://activate?lid=1")!)
+        XCTAssertEqual(delegate.preventer.mode, .lidClosed)
+        let expiresAt = try XCTUnwrap(delegate.preventer.expiresAt)
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, 24 * 60 * 60, accuracy: 2)
+
+        delegate.preventer.setDefaultDuration(60 * 60, for: .awake)
+        delegate.handle(URL(string: "redeye://activate")!)
+        XCTAssertEqual(delegate.preventer.mode, .awake)
+        XCTAssertEqual(try XCTUnwrap(delegate.preventer.expiresAt).timeIntervalSinceNow, 60 * 60, accuracy: 2)
+    }
+
+    func testURLForeverOverridesDefault() {
+        delegate.handle(URL(string: "redeye://activate?lid=1&forever=1")!)
+        XCTAssertEqual(delegate.preventer.mode, .lidClosed)
+        XCTAssertNil(delegate.preventer.expiresAt)
+
+        delegate.preventer.setDefaultDuration(60 * 60, for: .awake)
+        delegate.handle(URL(string: "redeye://activate?forever=1")!)
+        XCTAssertEqual(delegate.preventer.mode, .awake)
+        XCTAssertNil(delegate.preventer.expiresAt)
+    }
+
+    func testLidClosedForeverMenuItemOverridesDefault() throws {
+        let submenu = try XCTUnwrap(item("Stay Awake (Ignore Lid)", in: delegate.buildMenu()).submenu)
+        try perform(item("Forever", in: submenu))
+        XCTAssertEqual(delegate.preventer.mode, .lidClosed)
+        XCTAssertNil(delegate.preventer.expiresAt)
+    }
+
     func testURLActivateLidClosed() {
         delegate.handle(URL(string: "redeye://activate?lid=1&hours=2")!)
         XCTAssertEqual(delegate.preventer.mode, .lidClosed)
@@ -188,7 +219,7 @@ final class AppDelegateTests: XCTestCase {
     }
 
     func testStatusTextWhenLidClosed() throws {
-        delegate.preventer.activate(.lidClosed)
+        delegate.preventer.activate(.lidClosed, for: nil)
         XCTAssertEqual(delegate.statusText(), "Staying Awake (Ignoring Lid) Forever")
         delegate.preventer.activate(.lidClosed, for: 60 * 60)
         let formatter = DateFormatter()

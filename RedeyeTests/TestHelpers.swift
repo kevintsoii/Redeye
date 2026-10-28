@@ -80,3 +80,12 @@ func makeTestDefaults(for test: XCTestCase) -> UserDefaults {
     test.addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
     return defaults
 }
+
+/// Stands in for the battery and thermal readings. Changing `state` notifies like the real monitor.
+@MainActor
+final class FakePowerMonitor: PowerMonitoring {
+    var onChange: (() -> Void)?
+    var state = PowerState(batteryPercent: 80, onBattery: false, thermalState: .nominal) {
+        didSet { onChange?() }
+    }
+}

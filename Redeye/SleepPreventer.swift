@@ -19,15 +19,48 @@ enum SleepMode: CaseIterable {
     }
 }
 
+/// Why the Safety settings let the Mac sleep.
+enum SafetyStop: LocalizedError, Equatable {
+    /// On battery and below the cutoff, which is the associated percentage.
+    case lowBattery(Int)
+    case tooHot
+
+    var errorDescription: String? {
+        switch self {
+        case .lowBattery(let cutoff): "The battery is below \(cutoff)%, so Redeye is letting your Mac sleep. You can change this in Settings > Safety."
+        case .tooHot: "Your Mac is too hot, so Redeye is letting it sleep. You can change this in Settings > Safety."
+        }
+    }
+}
+
 /// Holds an IOKit power assertion, and in lid-closed mode the helper's `disablesleep`, plus the
 /// expiry timer. By default the display may sleep while the system stays awake (`caffeinate -i`).
 final class SleepPreventer {
     static let keepDisplayOnKey = "keepDisplayOn"
+    static let batteryCutoffKey = "batteryCutoff"
+    static let batteryCutoffPercentKey = "batteryCutoffPercent"
+    static let heatCutoffKey = "heatCutoff"
+
+    /// The durations offered in the menu and in Settings. nil is Forever.
+    static let durations: [(title: String, duration: TimeInterval?)] = [
+        ("Forever", nil),
+        ("30 Minutes", 30 * 60),
+        ("1 Hour", 60 * 60),
+        ("6 Hours", 6 * 60 * 60),
+        ("12 Hours", 12 * 60 * 60),
+        ("24 Hours", 24 * 60 * 60),
+    ]
+    static let batteryCutoffPercents = [10, 20, 30, 40, 50]
+
+    static func defaultDurationKey(for mode: SleepMode) -> String {
+        "\(mode)DefaultDuration"
+    }
 
     private var assertionID: IOPMAssertionID = 0
     private var expiryTimer: Timer?
     private let defaults: UserDefaults
     private let sleepDisabler: SleepDisabling
+    private let powerMonitor: PowerMonitoring
     /// Whether the helper was last asked to disable sleep, including requests still in flight.
     private var askedHelperToDisable = false
     /// Bumped on every change, so a late helper reply for an outdated request is ignored.
@@ -46,14 +79,46 @@ final class SleepPreventer {
         }
     }
 
+    /// Let the Mac sleep when it's on battery below `batteryCutoffPercent`. Off by default.
+    var batteryCutoff: Bool {
+        get { defaults.bool(forKey: Self.batteryCutoffKey) }
+        set {
+            defaults.set(newValue, forKey: Self.batteryCutoffKey)
+            checkSafety()
+        }
+    }
+
+    var batteryCutoffPercent: Int {
+        get { defaults.object(forKey: Self.batteryCutoffPercentKey) as? Int ?? 20 }
+        set {
+            defaults.set(newValue, forKey: Self.batteryCutoffPercentKey)
+            checkSafety()
+        }
+    }
+
+    /// Let the Mac sleep when macOS reports serious or critical thermal pressure. Off by default.
+    var heatCutoff: Bool {
+        get { defaults.bool(forKey: Self.heatCutoffKey) }
+        set {
+            defaults.set(newValue, forKey: Self.heatCutoffKey)
+            checkSafety()
+        }
+    }
+
     /// Called whenever the mode changes (including timer expiry).
     var onChange: (() -> Void)?
-    /// Called when lid-closed mode couldn't start or stopped unexpectedly.
+    /// Called when a mode couldn't start or stopped unexpectedly: the helper failed, or a Safety setting kicked in.
     var onError: ((Error) -> Void)?
 
-    init(defaults: UserDefaults = .standard, sleepDisabler: SleepDisabling = LidSleepHelper()) {
+    init(
+        defaults: UserDefaults = .standard,
+        sleepDisabler: SleepDisabling = LidSleepHelper(),
+        powerMonitor: PowerMonitoring = PowerMonitor()
+    ) {
         self.defaults = defaults
         self.sleepDisabler = sleepDisabler
+        self.powerMonitor = powerMonitor
+        powerMonitor.onChange = { [weak self] in self?.checkSafety() }
         sleepDisabler.onConnectionLost = { [weak self] in
             guard let self, askedHelperToDisable else { return }
             askedHelperToDisable = false
@@ -62,10 +127,52 @@ final class SleepPreventer {
         }
     }
 
-    /// Start preventing sleep in the given mode. Pass nil for indefinitely.
+    /// How long left-click, toggle and URLs without a duration keep the Mac awake in `mode`. nil is
+    /// Forever. Stay Awake defaults to Forever, Stay Awake (Ignore Lid) to 24 hours.
+    func defaultDuration(for mode: SleepMode) -> TimeInterval? {
+        guard let seconds = defaults.object(forKey: Self.defaultDurationKey(for: mode)) as? Double else {
+            return mode == .lidClosed ? 24 * 60 * 60 : nil
+        }
+        return seconds > 0 ? seconds : nil
+    }
+
+    /// Saved as seconds, with 0 for Forever.
+    func setDefaultDuration(_ duration: TimeInterval?, for mode: SleepMode) {
+        defaults.set(duration ?? 0, forKey: Self.defaultDurationKey(for: mode))
+    }
+
+    /// Why the Safety settings say the Mac should be allowed to sleep right now, if they do.
+    func safetyStop() -> SafetyStop? {
+        let state = powerMonitor.state
+        if heatCutoff && state.isTooHot { return .tooHot }
+        if batteryCutoff, state.onBattery, let percent = state.batteryPercent, percent < batteryCutoffPercent {
+            return .lowBattery(batteryCutoffPercent)
+        }
+        return nil
+    }
+
+    /// Stops and reports when a Safety setting says to, including while waiting for the helper.
+    private func checkSafety() {
+        guard isActive || askedHelperToDisable, let stop = safetyStop() else { return }
+        deactivate()
+        onError?(stop)
+    }
+
+    /// Start preventing sleep in the given mode for its default duration.
+    func activate(_ mode: SleepMode = .awake) {
+        activate(mode, for: defaultDuration(for: mode))
+    }
+
+    /// Start preventing sleep in the given mode. Pass nil for Forever.
     /// Stay Awake (Ignore Lid) waits for the helper; if it fails, Redeye falls back to Sleep Normally.
-    func activate(_ mode: SleepMode = .awake, for duration: TimeInterval? = nil) {
+    /// Refused, with `onError`, if a Safety setting already says to let the Mac sleep.
+    func activate(_ mode: SleepMode = .awake, for duration: TimeInterval?) {
         guard mode != .off else { return deactivate() }
+        if let stop = safetyStop() {
+            deactivate()
+            onError?(stop)
+            return
+        }
         guard mode == .lidClosed else { return apply(mode, for: duration) }
 
         generation += 1
@@ -149,12 +256,13 @@ final class SleepPreventer {
         }
     }
 
-    /// Sleep Normally ↔ Stay Awake. Used by the URL scheme.
+    /// Sleep Normally ↔ Stay Awake, for its default duration. Used by the URL scheme.
     func toggle() {
         isActive ? deactivate() : activate()
     }
 
-    /// Sleep Normally → Stay Awake → Stay Awake (Ignore Lid) → Sleep Normally. Used by left-click.
+    /// Sleep Normally → Stay Awake → Stay Awake (Ignore Lid) → Sleep Normally, each for its default
+    /// duration. Used by left-click.
     func cycle() {
         activate(mode.next)
     }
