@@ -43,4 +43,4 @@ Redeye prevents idle sleep the same way `caffeinate -i` does: the screen still t
 
 ## License
 
-TBD
+MIT. See [LICENSE](LICENSE).
