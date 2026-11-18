@@ -3,12 +3,18 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let preventer: SleepPreventer
     private let notifier: Notifying
+    private let autoBrightness: AutoBrightnessResetting
     private(set) var statusItem: NSStatusItem!
     private lazy var settings = SettingsWindowController(preventer: preventer)
 
-    init(preventer: SleepPreventer = SleepPreventer(), notifier: Notifying = Notifier()) {
+    init(
+        preventer: SleepPreventer = SleepPreventer(),
+        notifier: Notifying = Notifier(),
+        autoBrightness: AutoBrightnessResetting = AutoBrightness()
+    ) {
         self.preventer = preventer
         self.notifier = notifier
+        self.autoBrightness = autoBrightness
         super.init()
     }
 
@@ -150,6 +156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(durationsItem("Stay Awake", #selector(activateForDuration(_:))))
         menu.addItem(durationsItem("Stay Awake (Ignore Lid)", #selector(activateLidClosedForDuration(_:))))
 
+        // Hidden on Macs without a light sensor, e.g. a Mac mini or a closed MacBook on an external display.
+        if autoBrightness.isAvailable {
+            menu.addItem(.separator())
+            menu.addItem(item("Reset Auto-Brightness", #selector(resetAutoBrightness)))
+        }
+
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(openSettings), key: ","))
 
@@ -197,6 +209,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func activateLidClosedForDuration(_ sender: NSMenuItem) {
         preventer.activate(.lidClosed, for: durations[sender.tag].duration)
+    }
+
+    @objc private func resetAutoBrightness() {
+        autoBrightness.reset()
     }
 
     @objc private func openSettings() {

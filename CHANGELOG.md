@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Reset Auto-Brightness in the menu: turns auto-brightness off and back on, so the screen follows the light sensor again after you changed the brightness by hand. Only shown on Macs with a light sensor.
+
 ## [1.1.0] - 2026-10-28
 
 ### Added

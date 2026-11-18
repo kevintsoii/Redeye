@@ -10,6 +10,7 @@ Redeye/                  app (synchronized folder: new files are picked up autom
   SettingsWindowController.swift  General, Stay Awake, Safety and About tabs
   SleepPreventer.swift   the three modes, power assertion, timer, default durations, Safety cutoffs
   PowerMonitor.swift     battery, power source and thermal state
+  AutoBrightness.swift   Reset Auto-Brightness (private DisplayServices calls, no root)
   Notifier.swift         notifications when a mode ends on its own
   LidSleepHelper.swift   registers and talks to the privileged helper
   URLCommand.swift       parses redeye:// URLs

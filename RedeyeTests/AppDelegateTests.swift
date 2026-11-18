@@ -8,10 +8,11 @@ final class AppDelegateTests: XCTestCase {
     private lazy var helper = FakeSleepDisabler()
     private lazy var power = FakePowerMonitor()
     private lazy var notifier = FakeNotifier()
+    private lazy var brightness = FakeAutoBrightness()
     private lazy var delegate: AppDelegate = {
         let preventer = SleepPreventer(
             defaults: makeTestDefaults(for: self), sleepDisabler: helper, powerMonitor: power)
-        let delegate = AppDelegate(preventer: preventer, notifier: notifier)
+        let delegate = AppDelegate(preventer: preventer, notifier: notifier, autoBrightness: brightness)
         addTeardownBlock { @MainActor in delegate.preventer.deactivate(notify: false) }
         return delegate
     }()
@@ -31,6 +32,7 @@ final class AppDelegateTests: XCTestCase {
             "Sleeping Normally", "---",
             "Stay Awake",
             "Stay Awake (Ignore Lid)", "---",
+            "Reset Auto-Brightness", "---",
             "Settings…", "---",
             "Quit Redeye",
         ])
@@ -41,6 +43,18 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertEqual(titles(of: delegate.buildMenu()), [
             "Staying Awake Forever", "---",
             "Sleep Normally",
+            "Stay Awake",
+            "Stay Awake (Ignore Lid)", "---",
+            "Reset Auto-Brightness", "---",
+            "Settings…", "---",
+            "Quit Redeye",
+        ])
+    }
+
+    func testMenuHidesAutoBrightnessWithoutSensor() {
+        brightness.isAvailable = false
+        XCTAssertEqual(titles(of: delegate.buildMenu()), [
+            "Sleeping Normally", "---",
             "Stay Awake",
             "Stay Awake (Ignore Lid)", "---",
             "Settings…", "---",
@@ -74,7 +88,7 @@ final class AppDelegateTests: XCTestCase {
         let lidSubmenu = try XCTUnwrap(item("Stay Awake (Ignore Lid)", in: menu).submenu)
         // Items with a submenu get AppKit's own submenuAction:, so skip those.
         let actionable = (menu.items + submenu.items + lidSubmenu.items).filter { $0.action != nil && !$0.hasSubmenu }
-        XCTAssertEqual(actionable.count, 3 + 6 + 6)  // Sleep Normally, Settings, Quit + both sets of durations
+        XCTAssertEqual(actionable.count, 4 + 6 + 6)  // Sleep Normally, Reset Auto-Brightness, Settings, Quit + both sets of durations
         for menuItem in actionable {
             XCTAssertTrue(menuItem.target === delegate, menuItem.title)
             XCTAssertTrue(delegate.responds(to: menuItem.action), menuItem.title)
@@ -133,6 +147,13 @@ final class AppDelegateTests: XCTestCase {
         try perform(item("Sleep Normally", in: delegate.buildMenu()))
         XCTAssertFalse(delegate.preventer.isActive)
         XCTAssertFalse(hasRedeyeAssertion())
+    }
+
+    func testResetAutoBrightnessItem() throws {
+        delegate.preventer.activate()
+        try perform(item("Reset Auto-Brightness", in: delegate.buildMenu()))
+        XCTAssertEqual(brightness.resets, 1)
+        XCTAssertEqual(delegate.preventer.mode, .awake)  // leaves the mode alone
     }
 
     // MARK: - URL scheme

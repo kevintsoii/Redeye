@@ -12,6 +12,7 @@ Inspired by [KeepingYouAwake](https://github.com/newmarcel/KeepingYouAwake).
 - **Safety cutoffs.** Optional, in Settings > Safety: let the Mac sleep when the battery runs low or the Mac gets too hot. Off by default.
 - **Notifications.** Tells you when Redeye stops keeping your Mac awake on its own: a timer ran out, a Safety cutoff kicked in, or the Ignore Lid helper stopped. Turn them off in System Settings > Notifications.
 - **Keep screen on.** Optional, in Settings > Stay Awake. Off by default, so the screen turns off while your Mac keeps running.
+- **Reset Auto-Brightness.** Changed the brightness by hand and want auto-brightness to take over again? Right-click → Reset Auto-Brightness turns it off and back on. Only on Macs with a light sensor.
 - **Launch at Login.** Optional, in Settings (right-click → Settings…).
 - **Scriptable.** Control it from the terminal or a script with the `redeye://` URL scheme.
 - **Menu bar only.** No Dock icon, no windows.

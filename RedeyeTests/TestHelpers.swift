@@ -104,3 +104,14 @@ final class FakeNotifier: Notifying {
         posted.append((title, body))
     }
 }
+
+/// Counts resets instead of touching the real display.
+@MainActor
+final class FakeAutoBrightness: AutoBrightnessResetting {
+    var isAvailable = true
+    private(set) var resets = 0
+
+    func reset() {
+        resets += 1
+    }
+}
