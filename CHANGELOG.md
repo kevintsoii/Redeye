@@ -11,9 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
-- Stay Awake (Ignore Lid) could stop working after Redeye was updated: clicking into it did nothing, because macOS kept running only the old helper. If the helper doesn't answer within 5 seconds, Redeye now registers it again and retries once, and shows an error if it still can't start.
-- Registering the updated helper at launch could fail without telling you, so Redeye never tried again. It now waits for macOS to finish removing the old one and only remembers the helper once macOS has accepted it.
-- Redeye could crash when the connection to the helper failed.
+- Stay Awake (Ignore Lid) sometimes did nothing after an update.
 
 ## [1.1.0] - 2026-10-28
 
