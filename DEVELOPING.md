@@ -70,9 +70,13 @@ Launch at Login only works reliably from `/Applications`.
 The logic lives in `Shared/HelperSleepState.swift` and is tested by `HelperSleepStateTests`.
 
 Gotchas:
-- launchd only runs the helper build that was registered (otherwise `spawn failed`, exit 78, `needs LWCR update`). Redeye re-registers when the helper's code hash changes, so ad-hoc rebuilds keep working without re-approval.
+- launchd only runs the helper build that was registered. Any other build fails to spawn (exit 78, and `AMFI: Launch Constraint Violation (Constraint not matched)` from the kernel), and XPC requests to it just wait, with no reply and no error. The launch constraint lives on the Background Task Management item, which survives unregistering. Only an unregister plus register from the new build updates it. Registering for the first time doesn't. `LidSleepHelper` keeps it current in two ways:
+  - At launch, and before Stay Awake (Ignore Lid), it re-registers if the helper's code hash differs from `registeredHelperHash`. It saves the hash only once `SMAppService` reports the helper enabled.
+  - If the helper doesn't answer within 5 seconds anyway, it drops the request, re-registers and retries once.
+- For about half a second after unregistering, `register()` fails with SMAppService error 1 (`Job is not allowed to bootstrap` in smd's log), because BTM still has the item marked disabled. `LidSleepHelper` retries every 0.5 seconds for up to 5 seconds.
+- XPC calls the proxy error handler on its own queue, so closures handed to XPC must be `@Sendable`. Otherwise they inherit main-actor isolation and crash at runtime.
 - Stale LaunchServices entries for deleted copies of Redeye can break it ("Could not find and/or execute program"). Find them with `lsregister -dump | grep -i 'path:.*Redeye.app'` and remove them with `lsregister -u <path>`.
-- Logs: `/usr/bin/log show --predicate 'process == "RedeyeHelper"' --last 1h`. Use the full path, because `log` is a zsh builtin.
+- Logs: `/usr/bin/log show --predicate 'process == "RedeyeHelper"' --last 1h`. Use the full path, because `log` is a zsh builtin. Redeye's own `NSLog` lines don't show up there. Use `--predicate 'process == "Redeye" AND subsystem == "com.apple.libxpc.SMAppService"'` to see `Register`/`Unregister` results, and `launchctl print system/com.kevin.redeye.helper` for `last exit code`.
 - Manual reset: `sudo pmset -a disablesleep 0`.
 
 ## Manual checks before a release
