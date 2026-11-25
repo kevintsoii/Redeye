@@ -4,6 +4,8 @@ A tiny macOS menu bar app that keeps your Mac awake so long-running work, like a
 
 Inspired by [KeepingYouAwake](https://github.com/newmarcel/KeepingYouAwake).
 
+<img src="docs/menu.png" alt="Redeye's menu bar icon and menu, staying awake with the lid ignored until 3:56 PM" width="408">
+
 ## Features
 
 - **One click to switch modes.** Left-click the sunrise icon to step through Sleep Normally, Stay Awake and Stay Awake (Ignore Lid).

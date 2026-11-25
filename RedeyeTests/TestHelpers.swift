@@ -1,5 +1,6 @@
 import AppKit
 import IOKit.pwr_mgt
+import ServiceManagement
 import XCTest
 @testable import Redeye
 
@@ -113,5 +114,74 @@ final class FakeAutoBrightness: AutoBrightnessResetting {
 
     func reset() {
         resets += 1
+    }
+}
+
+/// Stands in for the helper's launchd registration.
+@MainActor
+final class FakeHelperService: HelperRegistering {
+    var status: SMAppService.Status = .enabled
+    /// What `status` becomes after a successful `register()`.
+    var statusAfterRegister: SMAppService.Status = .enabled
+    /// How many of the next `register()` calls fail, leaving `status` unchanged, like right after
+    /// unregistering while Background Task Management catches up.
+    var failingRegisters = 0
+    /// "register" and "unregister", in order.
+    private(set) var calls: [String] = []
+
+    func register() throws {
+        calls.append("register")
+        if failingRegisters > 0 {
+            failingRegisters -= 1
+            throw NSError(domain: "SMAppServiceErrorDomain", code: 1)
+        }
+        status = statusAfterRegister
+    }
+
+    func unregister() async throws {
+        calls.append("unregister")
+        status = .notRegistered
+    }
+}
+
+/// Stands in for the XPC connection to the helper.
+@MainActor
+final class FakeHelperConnection: HelperConnecting {
+    enum Answer { case reply, silent }
+
+    var onConnectionLost: (() -> Void)?
+    private(set) var isConnected = false
+    /// Every request, in order.
+    private(set) var sent: [Bool] = []
+    private(set) var resets = 0
+    /// How the helper answers each request to disable sleep, in order. Replies once these run out.
+    /// `.silent` is a helper launchd won't start: the request waits forever.
+    var answers: [Answer] = []
+
+    func send(_ disabled: Bool, reply: @escaping @MainActor (Error?) -> Void) {
+        isConnected = true
+        sent.append(disabled)
+        if disabled, !answers.isEmpty, answers.removeFirst() == .silent { return }
+        reply(nil)
+    }
+
+    func reset() {
+        isConnected = false
+        resets += 1
+    }
+
+    /// The connection drops on its own.
+    func drop() {
+        isConnected = false
+        onConnectionLost?()
+    }
+}
+
+/// Spins the main run loop until `condition` holds or `timeout` passes.
+@MainActor
+func runMainLoop(until condition: () -> Bool, timeout: TimeInterval = 2) {
+    let end = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < end {
+        runMainLoop(for: 0.01)
     }
 }
